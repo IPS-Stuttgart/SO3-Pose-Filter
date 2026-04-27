@@ -2,7 +2,7 @@ APPLY_FIXES: all
 
 PRE_COMMANDS:
   - command: cat /etc/os-release
-  - command: pip install numpy
+  - command: pip install -e .
     venv: pylint
 
 PYTHON_PYLINT_CONFIG_FILE: LINTER_DEFAULT
