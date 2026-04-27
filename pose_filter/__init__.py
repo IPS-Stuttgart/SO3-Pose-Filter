@@ -7,6 +7,7 @@ __all__ = [
     "measurements",
     "particle_filter",
     "plotting",
+    "smoothing",
     "so3",
     "transitions",
 ]

@@ -3,7 +3,8 @@
 This workspace contains a small, dependency-light prototype for early AMASS/SMPL motion-filtering results.
 It reads SMPL-style AMASS `.npz` files, converts local body joint axis-angle poses into SO(3) rotation
 matrices, creates synthetic noisy/occluded measurements, and evaluates transition baselines plus a particle
-filter.
+filter. It also reports cheap smoothing baselines so the particle filter is compared against simple temporal
+methods rather than only raw measurements.
 
 The code intentionally uses only NumPy and the Python standard library so it can run in the bundled Codex
 runtime.
@@ -69,6 +70,8 @@ Useful optional fields:
 - `robustness_occlusion_prob`
 - `process_noise_deg`
 - `proposal_gain`
+- `smoother_ema_alpha`
+- `smoother_chordal_window`
 
 ## Notes
 
@@ -76,3 +79,8 @@ Useful optional fields:
 from the current pose and estimates residual noise for sampling. This keeps the first prototype runnable
 without PyTorch while preserving the `sample_next` / `log_prob_next` interface expected by later neural
 models.
+
+The smoothing baselines are deterministic references:
+
+- `smoother_ema`: causal per-joint exponential smoothing in the tangent space of the previous SO(3) estimate.
+- `smoother_chordal`: offline centered-window chordal mean over visible observations.

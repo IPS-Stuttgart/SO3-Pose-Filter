@@ -17,6 +17,7 @@ from .evaluation import (
     write_json,
 )
 from .plotting import robustness_plot, trajectory_plot
+from .smoothing import SmootherConfig
 from .transitions import build_transition_model
 
 
@@ -69,6 +70,10 @@ def run_experiment(config: dict) -> dict:
         train,
         process_noise_deg=config.get("process_noise_deg"),
     )
+    smoother_config = SmootherConfig(
+        ema_alpha=float(config.get("smoother_ema_alpha", 0.35)),
+        chordal_window=int(config.get("smoother_chordal_window", 5)),
+    )
 
     transition_rows = transition_metric_rows(
         config["transition_model"],
@@ -84,6 +89,7 @@ def run_experiment(config: dict) -> dict:
         int(config["num_particles"]),
         seed,
         proposal_gain=float(config.get("proposal_gain", 0.2)),
+        smoother_config=smoother_config,
     )
     robust_rows = robustness_rows(
         test,
@@ -93,6 +99,7 @@ def run_experiment(config: dict) -> dict:
         int(config["num_particles"]),
         seed,
         proposal_gain=float(config.get("proposal_gain", 0.2)),
+        smoother_config=smoother_config,
     )
     preview_rows = trajectory_preview_rows(
         test[0],
@@ -102,6 +109,7 @@ def run_experiment(config: dict) -> dict:
         int(config["num_particles"]),
         seed + 4242,
         proposal_gain=float(config.get("proposal_gain", 0.2)),
+        smoother_config=smoother_config,
     )
 
     write_csv(output_dir / "transition_metrics.csv", transition_rows)
@@ -122,11 +130,19 @@ def run_experiment(config: dict) -> dict:
         "num_particles": int(config["num_particles"]),
         "process_noise_deg": config.get("process_noise_deg"),
         "proposal_gain": float(config.get("proposal_gain", 0.2)),
+        "smoothers": {
+            "ema_alpha": smoother_config.ema_alpha,
+            "chordal_window": smoother_config.chordal_window,
+        },
         "transition_metrics": transition_rows,
         "filter_metrics_mean": {
             "observed_error_deg": float(np.nanmean([r["observed_error_deg"] for r in filter_rows])),
             "filter_error_deg": float(np.nanmean([r["filter_error_deg"] for r in filter_rows])),
             "persistence_error_deg": float(np.nanmean([r["persistence_error_deg"] for r in filter_rows])),
+            "smoother_ema_error_deg": float(np.nanmean([r["smoother_ema_error_deg"] for r in filter_rows])),
+            "smoother_chordal_error_deg": float(
+                np.nanmean([r["smoother_chordal_error_deg"] for r in filter_rows])
+            ),
             "mean_ess": float(np.nanmean([r["mean_ess"] for r in filter_rows])),
         },
         "outputs": {

@@ -62,6 +62,27 @@ class PipelineTests(unittest.TestCase):
                 )
                 self.assertEqual(result.estimates.shape, test[0].rotations.shape)
 
+    def test_filter_evaluation_reports_smoother_baselines(self) -> None:
+        from pose_filter.evaluation import evaluate_filter_sequence
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_toy(root / "seq.npz")
+            seqs = load_dataset(root, "", frame_rate=20, num_joints=23)
+            rng = np.random.default_rng(12)
+
+            row = evaluate_filter_sequence(
+                seqs[0],
+                PersistenceTransition(),
+                noise_deg=8.0,
+                occlusion_prob=0.2,
+                num_particles=16,
+                rng=rng,
+            )
+
+            self.assertIn("smoother_ema_error_deg", row)
+            self.assertIn("smoother_chordal_error_deg", row)
+
 
 if __name__ == "__main__":
     unittest.main()
