@@ -50,6 +50,31 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
+      - name: Create alpine-wheels folder
+        run: mkdir -p alpine-wheels
+
+      - name: Cache wheel directory
+        id: cache-wheels
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/alpine-wheels
+          key: ${{ runner.os }}-alpine-wheels-${{ hashFiles('.mega-linter.yml') }}
+
+      - name: Build cp313 musllinux wheels
+        if: steps.cache-wheels.outputs.cache-hit != 'true'
+        uses: docker://python:3.13-alpine3.23
+        with:
+          args: >-
+            /bin/sh -lc "set -eux;
+            python -m pip install --upgrade pip wheel;
+            cd /github/workspace;
+            rm -rf alpine-wheels;
+            mkdir -p alpine-wheels;
+            python -m pip wheel --only-binary=:all: --no-deps numpy -w alpine-wheels"
+
+      - name: List available wheels
+        run: ls -l ./alpine-wheels
+
       # MegaLinter
       - name: MegaLinter
         id: ml
