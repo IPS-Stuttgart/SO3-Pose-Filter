@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "so3-pose-filter"
+version = "0.1.0"
+description = "Dependency-light SO(3)^K motion filtering prototype for AMASS/SMPL pose sequences."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pose_filter*"]
+

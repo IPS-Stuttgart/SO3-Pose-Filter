@@ -13,9 +13,9 @@ runtime.
 Generate a tiny synthetic AMASS-like dataset and run a smoke experiment:
 
 ```powershell
-$py='C:\Users\emper\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-& $py scripts\make_toy_amass.py --output data\tiny_amass --sequences 6 --frames 80
-& $py scripts\run_experiment.py --config configs\example.json
+python -m pip install -e .
+python scripts\make_toy_amass.py --output data\tiny_amass --sequences 6 --frames 80
+python scripts\run_experiment.py --config configs\example.json
 ```
 
 Outputs are written to `runs/example/`:
@@ -30,7 +30,7 @@ Outputs are written to `runs/example/`:
 Run tests:
 
 ```powershell
-& $py -m unittest discover -s tests
+python -m unittest discover -s tests
 ```
 
 ## Real AMASS Data
