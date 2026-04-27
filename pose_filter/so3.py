@@ -76,7 +76,7 @@ def log_map(r: np.ndarray) -> np.ndarray:
 
     out = np.zeros(r.shape[:-2] + (3,), dtype=np.float64)
     small = theta < 1e-6
-    out[small] = vee[small]
+    out[small] = 0.5 * vee[small]
 
     regular = (theta >= 1e-6) & (np.pi - theta > 1e-5)
     scale = theta[regular] / (2.0 * np.sin(theta[regular]))
