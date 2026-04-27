@@ -67,20 +67,26 @@ def line_plot_svg(
     path.write_text("\n".join(parts), encoding="utf-8")
 
 
-def robustness_plot(path: str | Path, rows: list[dict]) -> None:
-    """Plot filter error by noise, grouped across occlusion levels."""
+def robustness_plot(
+    path: str | Path,
+    rows: list[dict],
+    metric: str = "filter_error_deg",
+    title: str = "Filter Robustness",
+    y_label: str = "filter error (deg)",
+) -> None:
+    """Plot a robustness metric by noise, grouped across occlusion levels."""
     series: dict[str, list[tuple[float, float]]] = {}
     for row in rows:
         key = f"occ={row['occlusion_prob']:.2f}"
-        series.setdefault(key, []).append((float(row["noise_deg"]), float(row["filter_error_deg"])))
+        series.setdefault(key, []).append((float(row["noise_deg"]), float(row[metric])))
     for points in series.values():
         points.sort(key=lambda p: p[0])
     line_plot_svg(
         path,
         series,
-        title="Filter Robustness",
+        title=title,
         x_label="measurement noise (deg)",
-        y_label="filter error (deg)",
+        y_label=y_label,
     )
 
 
@@ -88,6 +94,12 @@ def trajectory_plot(path: str | Path, rows: list[dict]) -> None:
     series = {
         "observed": [(float(r["frame"]), float(r["observed_error_deg"])) for r in rows],
         "filter": [(float(r["frame"]), float(r["filter_error_deg"])) for r in rows],
+        "filter observed": [
+            (float(r["frame"]), float(r["filter_observed_joint_error_deg"])) for r in rows
+        ],
+        "filter occluded": [
+            (float(r["frame"]), float(r["filter_occluded_joint_error_deg"])) for r in rows
+        ],
     }
     line_plot_svg(
         path,

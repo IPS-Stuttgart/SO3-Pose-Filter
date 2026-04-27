@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from pose_filter.data import load_dataset, split_sequences
+from pose_filter.evaluation import evaluate_filter_sequence_artifacts, temporal_metrics
 from pose_filter.measurements import make_synthetic_measurements
 from pose_filter.particle_filter import run_particle_filter
 from pose_filter.transitions import (
@@ -61,6 +62,45 @@ class PipelineTests(unittest.TestCase):
                     rng=rng,
                 )
                 self.assertEqual(result.estimates.shape, test[0].rotations.shape)
+
+    def test_evaluation_reports_research_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx in range(4):
+                _write_toy(root / f"seq_{idx}.npz", frames=45 + idx * 3)
+            seqs = load_dataset(root, "", frame_rate=20, num_joints=23)
+            train, _, test = split_sequences(seqs, seed=4)
+            model = GaussianRandomWalkTransition.fit(train)
+
+            artifacts = evaluate_filter_sequence_artifacts(
+                test[0],
+                model,
+                noise_deg=8.0,
+                occlusion_prob=0.5,
+                num_particles=16,
+                rng=np.random.default_rng(10),
+            )
+
+            self.assertIn("observed_joint_error_deg", artifacts.metrics)
+            self.assertIn("filter_observed_joint_error_deg", artifacts.metrics)
+            self.assertIn("filter_occluded_joint_error_deg", artifacts.metrics)
+            self.assertIn("filter_acceleration_deg", artifacts.metrics)
+            self.assertIn("filter_jerk_error_deg", artifacts.metrics)
+            self.assertEqual(len(artifacts.per_joint_rows), 23)
+            self.assertEqual(
+                {row["estimate"] for row in artifacts.temporal_rows},
+                {"truth", "observed", "filter", "persistence"},
+            )
+
+    def test_temporal_metrics_are_zero_for_constant_pose(self) -> None:
+        rotations = np.broadcast_to(np.eye(3), (5, 23, 3, 3)).copy()
+
+        metrics = temporal_metrics(rotations, truth=rotations)
+
+        self.assertAlmostEqual(metrics["acceleration_deg"], 0.0)
+        self.assertAlmostEqual(metrics["jerk_deg"], 0.0)
+        self.assertAlmostEqual(metrics["acceleration_error_deg"], 0.0)
+        self.assertAlmostEqual(metrics["jerk_error_deg"], 0.0)
 
 
 if __name__ == "__main__":
