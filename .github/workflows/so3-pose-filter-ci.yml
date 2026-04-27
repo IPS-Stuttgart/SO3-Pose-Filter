@@ -1,0 +1,159 @@
+name: SO3 Pose Filter CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "configs/**"
+      - "pose_filter/**"
+      - "scripts/**"
+      - "tests/**"
+      - "README.md"
+      - ".github/workflows/so3-pose-filter-ci.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "configs/**"
+      - "pose_filter/**"
+      - "scripts/**"
+      - "tests/**"
+      - "README.md"
+      - ".github/workflows/so3-pose-filter-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  tests-and-smoke:
+    name: Tests + smoke experiment (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests
+
+      - name: Create synthetic AMASS-like dataset
+        run: |
+          python scripts/make_toy_amass.py \
+            --output data/tiny_amass \
+            --sequences 6 \
+            --frames 80
+
+      - name: Run example experiment
+        run: |
+          python scripts/run_experiment.py \
+            --config configs/example.json > summary.json
+          cat summary.json
+
+      - name: Validate example experiment outputs
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          summary = json.loads(Path("runs/example/summary.json").read_text())
+
+          assert summary["num_sequences"] == 6
+          assert summary["num_particles"] == 128
+          assert summary["splits"]["train"] >= 1
+          assert summary["splits"]["test"] >= 1
+
+          metrics = summary["filter_metrics_mean"]
+          for key in (
+              "observed_error_deg",
+              "filter_error_deg",
+              "persistence_error_deg",
+              "mean_ess",
+          ):
+              value = metrics[key]
+              assert isinstance(value, (int, float)), key
+              assert math.isfinite(value), key
+
+          required_outputs = [
+              "runs/example/summary.json",
+              "runs/example/transition_metrics.csv",
+              "runs/example/filter_metrics.csv",
+              "runs/example/robustness_metrics.csv",
+              "runs/example/trajectory_preview.csv",
+              "runs/example/plots/robustness.svg",
+              "runs/example/plots/trajectory_preview.svg",
+          ]
+          missing = [path for path in required_outputs if not Path(path).exists()]
+          assert not missing, f"missing outputs: {missing}"
+
+          print("Validated example summary:", metrics)
+          PY
+
+      - name: Run transition model sweep
+        if: matrix.python-version == '3.11'
+        run: |
+          python scripts/run_model_sweep.py \
+            --config configs/example.json \
+            --output runs/sweep > sweep-summary.json
+          cat sweep-summary.json
+
+      - name: Validate transition model sweep outputs
+        if: matrix.python-version == '3.11'
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          summary = json.loads(Path("runs/sweep/comparison_summary.json").read_text())
+          expected_models = {"persistence", "gaussian_rw", "learned_delta"}
+
+          assert set(summary["models"]) == expected_models
+          assert summary["best_filter_model"] in expected_models
+          assert math.isfinite(summary["best_filter_error_deg"])
+          assert len(summary["rows"]) == len(expected_models)
+
+          required_outputs = [
+              "runs/sweep/comparison_metrics.csv",
+              "runs/sweep/comparison_summary.json",
+          ]
+          for model in expected_models:
+              required_outputs.append(f"runs/sweep/{model}/summary.json")
+
+          missing = [path for path in required_outputs if not Path(path).exists()]
+          assert not missing, f"missing outputs: {missing}"
+
+          print("Validated sweep best model:", summary["best_filter_model"])
+          PY
+
+      - name: Upload smoke artifacts
+        if: always() && matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: so3-pose-filter-smoke
+          path: |
+            summary.json
+            sweep-summary.json
+            runs/example/**
+            runs/sweep/**
+
