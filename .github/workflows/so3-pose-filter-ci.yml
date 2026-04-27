@@ -1,0 +1,120 @@
+name: SO3 Pose Filter CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "configs/**"
+      - "pose_filter/**"
+      - "scripts/**"
+      - "tests/**"
+      - "README.md"
+      - ".github/workflows/so3-pose-filter-ci.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "configs/**"
+      - "pose_filter/**"
+      - "scripts/**"
+      - "tests/**"
+      - "README.md"
+      - ".github/workflows/so3-pose-filter-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  tests-and-smoke:
+    name: Tests + smoke experiment (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests
+
+      - name: Generate tiny AMASS-style smoke dataset
+        run: |
+          python scripts/make_toy_amass.py \
+            --output data/tiny_amass \
+            --sequences 6 \
+            --frames 80
+
+      - name: Run configured smoke experiment
+        run: |
+          python scripts/run_experiment.py --config configs/example.json
+
+      - name: Run transition model sweep
+        run: |
+          python scripts/run_model_sweep.py \
+            --config configs/example.json \
+            --output runs/sweep
+
+      - name: Validate smoke outputs
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          summary_path = Path("runs/example/summary.json")
+          sweep_path = Path("runs/sweep/comparison_metrics.csv")
+
+          assert summary_path.exists(), "missing experiment summary"
+          assert sweep_path.exists(), "missing sweep comparison metrics"
+
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          means = summary["filter_metrics_mean"]
+
+          assert summary["num_joints"] == 23
+          assert summary["num_sequences"] == 6
+          assert means["filter_error_deg"] < means["observed_error_deg"]
+          assert means["filter_error_deg"] < means["persistence_error_deg"]
+
+          with sweep_path.open(newline="", encoding="utf-8") as handle:
+              rows = list(csv.DictReader(handle))
+
+          assert {row["model"] for row in rows} == {
+              "persistence",
+              "gaussian_rw",
+              "learned_delta",
+          }
+          assert all(float(row["filter_error_deg"]) > 0.0 for row in rows)
+
+          print("Smoke summary:", means)
+          PY
+
+      - name: Upload smoke artifacts
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: so3-pose-filter-smoke-results
+          path: |
+            runs/example/summary.json
+            runs/example/*.csv
+            runs/example/plots/*.svg
+            runs/sweep/comparison_metrics.csv
+            runs/sweep/comparison_summary.json
