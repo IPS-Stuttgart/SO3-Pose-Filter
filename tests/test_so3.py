@@ -3,7 +3,6 @@ from __future__ import annotations
 import unittest
 
 import numpy as np
-
 from pose_filter.so3 import (
     axis_angle_to_matrix,
     geodesic_distance,
