@@ -5,12 +5,12 @@ import csv
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from pose_filter.experiment import load_config, run_experiment
-
+from pose_filter.experiment import load_config, run_experiment  # noqa: E402
 
 MODELS = ("persistence", "gaussian_rw", "learned_delta")
 
@@ -22,7 +22,7 @@ def _metric(summary: dict, name: str) -> float:
     return float("nan")
 
 
-def _write_csv(path: Path, rows: list[dict]) -> None:
+def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -30,8 +30,10 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def run_sweep(config: dict, output_root: Path, models: tuple[str, ...] = MODELS) -> dict:
-    rows = []
+def run_sweep(
+    config: dict, output_root: Path, models: tuple[str, ...] = MODELS
+) -> dict:
+    rows: list[dict[str, Any]] = []
     summaries = {}
     for model in models:
         model_config = dict(config)
@@ -52,7 +54,7 @@ def run_sweep(config: dict, output_root: Path, models: tuple[str, ...] = MODELS)
             }
         )
 
-    best = min(rows, key=lambda row: row["filter_error_deg"])
+    best = min(rows, key=lambda row: float(row["filter_error_deg"]))
     payload = {
         "models": list(models),
         "best_filter_model": best["model"],
@@ -70,8 +72,12 @@ def run_sweep(config: dict, output_root: Path, models: tuple[str, ...] = MODELS)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run all transition baselines from one config.")
-    parser.add_argument("--config", required=True, help="Path to JSON experiment config.")
+    parser = argparse.ArgumentParser(
+        description="Run all transition baselines from one config."
+    )
+    parser.add_argument(
+        "--config", required=True, help="Path to JSON experiment config."
+    )
     parser.add_argument(
         "--output",
         default=None,

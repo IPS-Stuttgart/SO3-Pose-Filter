@@ -109,7 +109,7 @@ jobs:
 
       - name: Upload smoke artifacts
         if: matrix.python-version == '3.11'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: so3-pose-filter-smoke-results
           path: |
