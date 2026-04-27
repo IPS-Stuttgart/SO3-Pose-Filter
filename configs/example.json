@@ -1,0 +1,21 @@
+{
+  "data_root": "data/tiny_amass",
+  "dataset_subset": "",
+  "frame_rate": 20,
+  "num_joints": 23,
+  "noise_deg": 12.0,
+  "occlusion_prob": 0.25,
+  "num_particles": 128,
+  "transition_model": "gaussian_rw",
+  "output_dir": "runs/example",
+  "seed": 7,
+  "max_sequences": 6,
+  "min_frames": 20,
+  "train_fraction": 0.6,
+  "val_fraction": 0.2,
+  "rollout_horizon": 10,
+  "robustness_noise_deg": [5.0, 10.0, 20.0],
+  "robustness_occlusion_prob": [0.0, 0.25, 0.5],
+  "process_noise_deg": 3.0,
+  "proposal_gain": 0.2
+}
