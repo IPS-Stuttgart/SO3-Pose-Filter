@@ -40,6 +40,36 @@ def _normalize_log_weights_axis0(log_weights: np.ndarray) -> tuple[np.ndarray, n
     return weights, np.log(weights + 1e-300)
 
 
+def _prepare_confidence(mask: np.ndarray, confidence: np.ndarray | None) -> np.ndarray:
+    if confidence is None:
+        return mask.astype(np.float64)
+    confidence = np.asarray(confidence, dtype=np.float64)
+    if confidence.shape != mask.shape:
+        raise ValueError(f"expected confidence shaped {mask.shape}, got {confidence.shape}")
+    if np.any(~np.isfinite(confidence)):
+        raise ValueError("confidence values must be finite")
+    if np.any((confidence < 0.0) | (confidence > 1.0)):
+        raise ValueError("confidence values must be in [0, 1]")
+    return np.where(mask, confidence, 0.0)
+
+
+def _prepare_joint_noise(
+    noise_sigma_rad: float,
+    mask: np.ndarray,
+    joint_noise_sigma_rad: np.ndarray | None,
+) -> np.ndarray:
+    if joint_noise_sigma_rad is None:
+        return np.full(mask.shape, max(float(noise_sigma_rad), 1e-8), dtype=np.float64)
+    sigma = np.asarray(joint_noise_sigma_rad, dtype=np.float64)
+    if sigma.shape == ():
+        sigma = np.full(mask.shape, float(sigma), dtype=np.float64)
+    elif sigma.shape != mask.shape:
+        raise ValueError(f"expected joint_noise_sigma_rad shaped {mask.shape}, got {sigma.shape}")
+    if np.any(~np.isfinite(sigma)) or np.any(sigma <= 0.0):
+        raise ValueError("joint_noise_sigma_rad values must be positive and finite")
+    return np.maximum(sigma, 1e-8)
+
+
 def initialize_particles(
     first_observation: np.ndarray,
     first_mask: np.ndarray,
@@ -72,18 +102,26 @@ def run_particle_filter(
     resample_threshold: float = 0.5,
     factorized_update: bool = True,
     proposal_gain: float = 0.2,
+    confidence: np.ndarray | None = None,
+    joint_noise_sigma_rad: np.ndarray | None = None,
 ) -> ParticleFilterResult:
     """Run a guided bootstrap particle filter on one sequence.
 
     `proposal_gain` applies a small SO(3) correction toward observed joints before
     weighting. This keeps the low-particle prototype useful in the high-dimensional
     product space without changing the measurement likelihood used for scoring.
+    `confidence` is shaped `[T, J]`; zero confidence is equivalent to an occluded
+    joint, while values between zero and one downweight proposal correction and
+    measurement likelihood. `joint_noise_sigma_rad` can override the scalar
+    measurement noise with per-frame, per-joint standard deviations.
     """
     observations = np.asarray(observations, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
+    confidence = _prepare_confidence(mask, confidence)
+    joint_noise_sigma_rad = _prepare_joint_noise(noise_sigma_rad, mask, joint_noise_sigma_rad)
     t_steps = observations.shape[0]
     particles = initialize_particles(
-        observations[0], mask[0], num_particles, noise_sigma_rad, rng
+        observations[0], confidence[0] > 0.0, num_particles, noise_sigma_rad, rng
     )
     log_weights = np.full(num_particles, -np.log(num_particles), dtype=np.float64)
     log_joint_weights = np.full(
@@ -99,14 +137,13 @@ def run_particle_filter(
 
         if proposal_gain > 0.0:
             delta_to_observation = left_delta(particles, observations[t])
-            correction = np.where(
-                mask[t][None, :, None], float(proposal_gain) * delta_to_observation, 0.0
-            )
+            correction_weight = float(proposal_gain) * confidence[t][None, :, None]
+            correction = correction_weight * delta_to_observation
             particles = left_apply_delta(correction, particles)
 
         dist = geodesic_distance(particles, observations[t])
-        joint_ll = -0.5 * (dist / max(noise_sigma_rad, 1e-8)) ** 2
-        joint_ll = np.where(mask[t][None, :], joint_ll, 0.0)
+        joint_sigma = joint_noise_sigma_rad[t][None, :]
+        joint_ll = -0.5 * confidence[t][None, :] * (dist / joint_sigma) ** 2
 
         if factorized_update:
             joint_weights, log_joint_weights = _normalize_log_weights_axis0(

@@ -46,6 +46,8 @@ def run_experiment(config: dict) -> dict:
     seed = int(config.get("seed", 0))
     output_dir = Path(config.get("output_dir", "runs/default"))
     output_dir.mkdir(parents=True, exist_ok=True)
+    confidence_noise_std = float(config.get("confidence_noise_std", 0.0))
+    min_confidence = float(config.get("min_confidence", 0.2))
 
     sequences = load_dataset(
         config["data_root"],
@@ -84,6 +86,8 @@ def run_experiment(config: dict) -> dict:
         int(config["num_particles"]),
         seed,
         proposal_gain=float(config.get("proposal_gain", 0.2)),
+        confidence_noise_std=confidence_noise_std,
+        min_confidence=min_confidence,
     )
     robust_rows = robustness_rows(
         test,
@@ -93,6 +97,8 @@ def run_experiment(config: dict) -> dict:
         int(config["num_particles"]),
         seed,
         proposal_gain=float(config.get("proposal_gain", 0.2)),
+        confidence_noise_std=confidence_noise_std,
+        min_confidence=min_confidence,
     )
     preview_rows = trajectory_preview_rows(
         test[0],
@@ -102,6 +108,8 @@ def run_experiment(config: dict) -> dict:
         int(config["num_particles"]),
         seed + 4242,
         proposal_gain=float(config.get("proposal_gain", 0.2)),
+        confidence_noise_std=confidence_noise_std,
+        min_confidence=min_confidence,
     )
 
     write_csv(output_dir / "transition_metrics.csv", transition_rows)
@@ -122,8 +130,11 @@ def run_experiment(config: dict) -> dict:
         "num_particles": int(config["num_particles"]),
         "process_noise_deg": config.get("process_noise_deg"),
         "proposal_gain": float(config.get("proposal_gain", 0.2)),
+        "confidence_noise_std": confidence_noise_std,
+        "min_confidence": min_confidence,
         "transition_metrics": transition_rows,
         "filter_metrics_mean": {
+            "mean_confidence": float(np.nanmean([r["mean_confidence"] for r in filter_rows])),
             "observed_error_deg": float(np.nanmean([r["observed_error_deg"] for r in filter_rows])),
             "filter_error_deg": float(np.nanmean([r["filter_error_deg"] for r in filter_rows])),
             "persistence_error_deg": float(np.nanmean([r["persistence_error_deg"] for r in filter_rows])),

@@ -4,6 +4,8 @@ This workspace contains a small, dependency-light prototype for early AMASS/SMPL
 It reads SMPL-style AMASS `.npz` files, converts local body joint axis-angle poses into SO(3) rotation
 matrices, creates synthetic noisy/occluded measurements, and evaluates transition baselines plus a particle
 filter.
+Measurements can carry per-joint confidence scores, so detector outputs with soft joint reliability can
+downweight uncertain observations instead of dropping them with a hard mask only.
 
 The code intentionally uses only NumPy and the Python standard library so it can run in the bundled Codex
 runtime.
@@ -84,6 +86,8 @@ Useful optional fields:
 - `robustness_occlusion_prob`
 - `process_noise_deg`
 - `proposal_gain`
+- `confidence_noise_std`
+- `min_confidence`
 
 ## Notes
 
@@ -91,3 +95,7 @@ Useful optional fields:
 from the current pose and estimates residual noise for sampling. This keeps the first prototype runnable
 without PyTorch while preserving the `sample_next` / `log_prob_next` interface expected by later neural
 models.
+
+Synthetic confidence values default to the original binary mask behavior when `confidence_noise_std` is
+zero. Setting `confidence_noise_std > 0` samples observed-joint confidences in `[min_confidence, 1]`; these
+scores scale both the guided proposal correction and the measurement likelihood.

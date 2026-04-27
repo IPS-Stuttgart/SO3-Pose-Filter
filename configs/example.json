@@ -17,5 +17,7 @@
   "robustness_noise_deg": [5.0, 10.0, 20.0],
   "robustness_occlusion_prob": [0.0, 0.25, 0.5],
   "process_noise_deg": 3.0,
-  "proposal_gain": 0.2
+  "proposal_gain": 0.2,
+  "confidence_noise_std": 0.15,
+  "min_confidence": 0.35
 }

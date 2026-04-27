@@ -7,8 +7,9 @@ from pathlib import Path
 import numpy as np
 
 from pose_filter.data import load_dataset, split_sequences
-from pose_filter.measurements import make_synthetic_measurements
+from pose_filter.measurements import log_likelihood, make_synthetic_measurements
 from pose_filter.particle_filter import run_particle_filter
+from pose_filter.so3 import axis_angle_to_matrix
 from pose_filter.transitions import (
     GaussianRandomWalkTransition,
     LearnedDeltaTransition,
@@ -48,7 +49,17 @@ class PipelineTests(unittest.TestCase):
                 LearnedDeltaTransition.fit(train),
             ]
             rng = np.random.default_rng(9)
-            meas = make_synthetic_measurements(test[0].rotations, 10.0, 0.2, rng)
+            meas = make_synthetic_measurements(
+                test[0].rotations,
+                10.0,
+                0.2,
+                rng,
+                confidence_noise_std=0.15,
+                min_confidence=0.4,
+            )
+            self.assertEqual(meas.confidence.shape, meas.mask.shape)
+            self.assertTrue(np.all(meas.confidence[~meas.mask] == 0.0))
+            self.assertTrue(np.all(meas.confidence[meas.mask] >= 0.4))
             for model in models:
                 pred = model.sample_next(test[0].rotations[0], rng, n_samples=3)
                 self.assertEqual(pred.shape, (3, 23, 3, 3))
@@ -59,8 +70,55 @@ class PipelineTests(unittest.TestCase):
                     meas.noise_sigma_rad,
                     num_particles=16,
                     rng=rng,
+                    confidence=meas.confidence,
                 )
                 self.assertEqual(result.estimates.shape, test[0].rotations.shape)
+
+    def test_confidence_downweights_measurement_likelihood(self) -> None:
+        state = axis_angle_to_matrix(np.zeros((1, 3)))
+        observation = axis_angle_to_matrix(np.array([[0.0, 0.0, 1.0]]))
+        mask = np.array([True])
+
+        high_confidence = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            confidence=np.array([1.0]),
+        )
+        low_confidence = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            confidence=np.array([0.1]),
+        )
+        zero_confidence = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            confidence=np.array([0.0]),
+        )
+
+        self.assertGreater(float(low_confidence), float(high_confidence))
+        self.assertAlmostEqual(float(zero_confidence), 0.0)
+
+        small_sigma = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            joint_noise_sigma_rad=np.array([0.1]),
+        )
+        large_sigma = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            joint_noise_sigma_rad=np.array([1.0]),
+        )
+        self.assertGreater(float(large_sigma), float(small_sigma))
 
 
 if __name__ == "__main__":
