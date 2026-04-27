@@ -43,6 +43,25 @@ Point `data_root` in a config JSON file at an AMASS/SMPL-style directory contain
 The prototype uses the 23 local body joints in `poses[:, 3:72]`, excluding global root orientation,
 global translation, hands, and face.
 
+## Quaternion and PyRecEst Bridge
+
+The filter internals use rotation matrices, but `pose_filter.quaternion` provides boundary converters for
+scalar-last unit quaternions `(x, y, z, w)` on the upper hyperhemisphere `S^3_+`:
+
+```python
+from pose_filter.quaternion import rotations_to_pyrecest_hyperhemisphere_dirac
+from pose_filter.quaternion import rotations_to_quaternions
+
+quaternions = rotations_to_quaternions(rotations)  # [N, 23, 4], w >= 0
+distribution = rotations_to_pyrecest_hyperhemisphere_dirac(
+    rotations,
+    weights=particle_weights,
+)
+```
+
+PyRecEst is only imported inside the PyRecEst bridge helpers, so the existing NumPy-only workflow still
+runs without it installed.
+
 ## Config Fields
 
 Required fields:
