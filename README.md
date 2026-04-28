@@ -1,12 +1,12 @@
 # SO(3)^K Motion Filtering Prototype
 
-This workspace contains a small, dependency-light prototype for early AMASS/SMPL motion-filtering results.
+This workspace contains a small prototype for early AMASS/SMPL motion-filtering results.
 It reads SMPL-style AMASS `.npz` files, converts local body joint axis-angle poses into SO(3) rotation
 matrices, creates synthetic noisy/occluded measurements, and evaluates transition baselines plus a particle
 filter.
 
-The code intentionally uses only NumPy and the Python standard library. The package source follows a
-PyRecEst-style `src/pose_filter` layout.
+The core SO(3) numerics use NumPy, and quaternion product-state distributions use PyRecEst as their
+backend. The package source follows a `src/pose_filter` layout.
 
 ## Quick Start
 
@@ -58,10 +58,11 @@ global translation, hands, and face.
 Copy `configs/amass_small.example.json` to a local config and replace `data_root` with the real AMASS
 directory. Keep generated real-data outputs under `runs/`; they are ignored by git.
 
-## Quaternion and PyRecEst Bridge
+## Quaternion PyRecEst Backend
 
-The filter internals use rotation matrices, but `pose_filter.quaternion` provides boundary converters for
-scalar-last unit quaternions `(x, y, z, w)` on the upper hyperhemisphere `S^3_+`:
+The filter internals use rotation matrices, while `pose_filter.quaternion` uses PyRecEst
+`HyperhemisphereCartProdDiracDistribution` objects as the backend for scalar-last unit quaternion
+states `(x, y, z, w)` on the upper hyperhemisphere `S^3_+`:
 
 ```python
 from pose_filter.quaternion import rotations_to_pyrecest_hyperhemisphere_dirac
@@ -74,8 +75,8 @@ distribution = rotations_to_pyrecest_hyperhemisphere_dirac(
 )
 ```
 
-PyRecEst is only imported inside the PyRecEst bridge helpers, so the existing NumPy-only workflow still
-runs without it installed.
+PyRecEst is a runtime dependency because these quaternion product-state distributions are part of the
+package backend rather than an optional adapter.
 
 ## Config Fields
 

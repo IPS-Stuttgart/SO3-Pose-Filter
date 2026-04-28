@@ -1,10 +1,15 @@
-"""Quaternion and PyRecEst bridge helpers for SO(3)^K pose states."""
+"""PyRecEst-backed quaternion helpers for SO(3)^K pose states."""
 
 from __future__ import annotations
 
 import numpy as np
+from pyrecest.distributions.cart_prod.hyperhemisphere_cart_prod_dirac_distribution import (
+    HyperhemisphereCartProdDiracDistribution,
+)
 
 from .so3 import EPS, project_to_so3
+
+PyRecEstQuaternionDistribution = HyperhemisphereCartProdDiracDistribution
 
 
 def canonicalize_quaternions(quaternions: np.ndarray) -> np.ndarray:
@@ -103,8 +108,8 @@ def quaternions_to_rotations(quaternions: np.ndarray) -> np.ndarray:
 
 def quaternions_to_pyrecest_hyperhemisphere_dirac(
     quaternions: np.ndarray, weights: np.ndarray | None = None
-):
-    """Create a PyRecEst `HyperhemisphereCartProdDiracDistribution`.
+) -> HyperhemisphereCartProdDiracDistribution:
+    """Create the PyRecEst backend distribution for quaternion pose states.
 
     Input quaternions are scalar-last and shaped `(N, J, 4)`. A single state
     shaped `(J, 4)` is accepted and treated as one Dirac component.
@@ -113,7 +118,9 @@ def quaternions_to_pyrecest_hyperhemisphere_dirac(
     if q.ndim == 2:
         q = q[None, ...]
     if q.ndim != 3:
-        raise ValueError(f"expected quaternions shaped (N, J, 4) or (J, 4), got {q.shape}")
+        raise ValueError(
+            f"expected quaternions shaped (N, J, 4) or (J, 4), got {q.shape}"
+        )
 
     n_particles, n_joints, _ = q.shape
     if weights is None:
@@ -127,10 +134,6 @@ def quaternions_to_pyrecest_hyperhemisphere_dirac(
             raise ValueError("weights must have a positive finite sum")
         w = w / total
 
-    from pyrecest.distributions.cart_prod.hyperhemisphere_cart_prod_dirac_distribution import (
-        HyperhemisphereCartProdDiracDistribution,
-    )
-
     return HyperhemisphereCartProdDiracDistribution(
         d=q.reshape(n_particles, n_joints * 4),
         w=w,
@@ -141,27 +144,35 @@ def quaternions_to_pyrecest_hyperhemisphere_dirac(
 
 def rotations_to_pyrecest_hyperhemisphere_dirac(
     rotations: np.ndarray, weights: np.ndarray | None = None
-):
-    """Create a PyRecEst hyperhemisphere Dirac distribution from SO(3)^K rotations."""
+) -> HyperhemisphereCartProdDiracDistribution:
+    """Create the PyRecEst backend distribution from SO(3)^K rotations."""
     return quaternions_to_pyrecest_hyperhemisphere_dirac(
         rotations_to_quaternions(rotations),
         weights=weights,
     )
 
 
-def pyrecest_hyperhemisphere_dirac_to_quaternions(distribution) -> tuple[np.ndarray, np.ndarray]:
+def pyrecest_hyperhemisphere_dirac_to_quaternions(
+    distribution,
+) -> tuple[np.ndarray, np.ndarray]:
     """Return `(quaternions, weights)` from a PyRecEst hyperhemisphere Dirac distribution."""
+    if not isinstance(distribution, HyperhemisphereCartProdDiracDistribution):
+        raise TypeError("expected a PyRecEst HyperhemisphereCartProdDiracDistribution")
     if getattr(distribution, "dim_hemisphere", None) != 3:
         raise ValueError("expected a PyRecEst distribution with dim_hemisphere=3")
     n_joints = int(getattr(distribution, "n_hemispheres"))
     d = np.asarray(distribution.d, dtype=np.float64)
     if d.ndim != 2 or d.shape[1] != n_joints * 4:
-        raise ValueError(f"expected flattened quaternions shaped (N, {n_joints * 4}), got {d.shape}")
+        raise ValueError(
+            f"expected flattened quaternions shaped (N, {n_joints * 4}), got {d.shape}"
+        )
     weights = np.asarray(distribution.w, dtype=np.float64)
     return canonicalize_quaternions(d.reshape(d.shape[0], n_joints, 4)), weights.copy()
 
 
-def pyrecest_hyperhemisphere_dirac_to_rotations(distribution) -> tuple[np.ndarray, np.ndarray]:
+def pyrecest_hyperhemisphere_dirac_to_rotations(
+    distribution,
+) -> tuple[np.ndarray, np.ndarray]:
     """Return `(rotations, weights)` from a PyRecEst hyperhemisphere Dirac distribution."""
     quaternions, weights = pyrecest_hyperhemisphere_dirac_to_quaternions(distribution)
     return quaternions_to_rotations(quaternions), weights
