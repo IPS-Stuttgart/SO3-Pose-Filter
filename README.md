@@ -25,6 +25,8 @@ Outputs are written to `runs/example/`:
 - `summary.json`
 - `transition_metrics.csv`
 - `filter_metrics.csv`
+- `per_joint_metrics.csv`
+- `temporal_metrics.csv`
 - `ablation_metrics.csv`
 - `robustness_metrics.csv`
 - `plots/*.svg`
@@ -127,6 +129,10 @@ The smoothing baselines are deterministic references:
 
 - `smoother_ema`: causal per-joint exponential smoothing in the tangent space of the previous SO(3) estimate.
 - `smoother_chordal`: offline centered-window chordal mean over visible observations.
+
+The experiment outputs include research-oriented diagnostics beyond aggregate pose error:
+observed-vs-occluded joint errors, per-joint errors, and temporal acceleration/jerk metrics for the raw
+measurements, filtered estimate, persistence baseline, and ground truth.
 
 `ablation_metrics.csv` varies one filter setting at a time around the configured baseline. It reports
 particle-count, proposal-gain, factorized-update, and resampling-threshold rows so experiments can compare

@@ -9,8 +9,9 @@ import numpy as np
 
 from .data import load_dataset, split_sequences
 from .evaluation import (
+    FILTER_SUMMARY_KEYS,
     ablation_rows,
-    evaluate_filter,
+    evaluate_filter_with_artifacts,
     robustness_rows,
     trajectory_preview_rows,
     transition_metric_rows,
@@ -31,6 +32,14 @@ REQUIRED_CONFIG_FIELDS = {
     "num_particles",
     "transition_model",
 }
+
+
+def _mean_metric(rows: list[dict], key: str) -> float:
+    values = np.asarray([row[key] for row in rows], dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return float("nan")
+    return float(np.mean(values))
 
 
 def load_config(path: str | Path) -> dict:
@@ -96,8 +105,10 @@ def run_experiment(config: dict) -> dict:
         test,
         rollout_horizon=int(config.get("rollout_horizon", 10)),
     )
-    default_ablation_particle_counts = sorted({max(8, num_particles // 2), num_particles, max(8, num_particles * 2)})
-    filter_rows = evaluate_filter(
+    default_ablation_particle_counts = sorted(
+        {max(8, num_particles // 2), num_particles, max(8, num_particles * 2)}
+    )
+    filter_rows, per_joint_rows, temporal_rows = evaluate_filter_with_artifacts(
         test,
         model,
         noise_deg,
@@ -152,10 +163,26 @@ def run_experiment(config: dict) -> dict:
 
     write_csv(output_dir / "transition_metrics.csv", transition_rows)
     write_csv(output_dir / "filter_metrics.csv", filter_rows)
+    write_csv(output_dir / "per_joint_metrics.csv", per_joint_rows)
+    write_csv(output_dir / "temporal_metrics.csv", temporal_rows)
     write_csv(output_dir / "ablation_metrics.csv", ablations)
     write_csv(output_dir / "robustness_metrics.csv", robust_rows)
     write_csv(output_dir / "trajectory_preview.csv", preview_rows)
     robustness_plot(output_dir / "plots" / "robustness.svg", robust_rows)
+    robustness_plot(
+        output_dir / "plots" / "robustness_occluded.svg",
+        robust_rows,
+        metric="filter_occluded_joint_error_deg",
+        title="Occluded-Joint Robustness",
+        y_label="occluded-joint filter error (deg)",
+    )
+    robustness_plot(
+        output_dir / "plots" / "robustness_acceleration.svg",
+        robust_rows,
+        metric="filter_acceleration_error_deg",
+        title="Temporal Acceleration Robustness",
+        y_label="acceleration error (deg)",
+    )
     trajectory_plot(output_dir / "plots" / "trajectory_preview.svg", preview_rows)
 
     summary = {
@@ -177,17 +204,14 @@ def run_experiment(config: dict) -> dict:
         },
         "transition_metrics": transition_rows,
         "filter_metrics_mean": {
-            "observed_error_deg": float(np.nanmean([r["observed_error_deg"] for r in filter_rows])),
-            "filter_error_deg": float(np.nanmean([r["filter_error_deg"] for r in filter_rows])),
-            "persistence_error_deg": float(np.nanmean([r["persistence_error_deg"] for r in filter_rows])),
-            "smoother_ema_error_deg": float(np.nanmean([r["smoother_ema_error_deg"] for r in filter_rows])),
-            "smoother_chordal_error_deg": float(np.nanmean([r["smoother_chordal_error_deg"] for r in filter_rows])),
-            "mean_ess": float(np.nanmean([r["mean_ess"] for r in filter_rows])),
+            key: _mean_metric(filter_rows, key) for key in FILTER_SUMMARY_KEYS
         },
         "ablation_metrics": ablations,
         "outputs": {
             "transition_metrics": str(output_dir / "transition_metrics.csv"),
             "filter_metrics": str(output_dir / "filter_metrics.csv"),
+            "per_joint_metrics": str(output_dir / "per_joint_metrics.csv"),
+            "temporal_metrics": str(output_dir / "temporal_metrics.csv"),
             "ablation_metrics": str(output_dir / "ablation_metrics.csv"),
             "robustness_metrics": str(output_dir / "robustness_metrics.csv"),
             "trajectory_preview": str(output_dir / "trajectory_preview.csv"),
