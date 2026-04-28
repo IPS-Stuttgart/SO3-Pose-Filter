@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import quaternion
 
 from .so3 import EPS, project_to_so3
 
@@ -20,33 +19,85 @@ def canonicalize_quaternions(quaternions: np.ndarray) -> np.ndarray:
     return np.where(q[..., 3:4] < 0.0, -q, q)
 
 
-def _from_numpy_quaternion_order(quaternions: np.ndarray) -> np.ndarray:
-    """Convert scalar-first `(w, x, y, z)` arrays to scalar-last `(x, y, z, w)`."""
-    return np.concatenate([quaternions[..., 1:], quaternions[..., :1]], axis=-1)
-
-
-def _to_numpy_quaternion_order(quaternions: np.ndarray) -> np.ndarray:
-    """Convert scalar-last `(x, y, z, w)` arrays to scalar-first `(w, x, y, z)`."""
-    return np.concatenate([quaternions[..., 3:], quaternions[..., :3]], axis=-1)
-
-
 def rotations_to_quaternions(rotations: np.ndarray) -> np.ndarray:
     """Convert rotation matrices shaped `(..., 3, 3)` to scalar-last quaternions."""
     raw = np.asarray(rotations, dtype=np.float64)
     if raw.shape[-2:] != (3, 3):
         raise ValueError(f"expected rotations shaped (..., 3, 3), got {raw.shape}")
     r = project_to_so3(raw)
-    q = quaternion.as_float_array(
-        quaternion.from_rotation_matrix(r, nonorthogonal=False)
-    )
-    return canonicalize_quaternions(_from_numpy_quaternion_order(q))
+
+    flat = r.reshape((-1, 3, 3))
+    q = np.empty((flat.shape[0], 4), dtype=np.float64)
+    trace = flat[:, 0, 0] + flat[:, 1, 1] + flat[:, 2, 2]
+
+    positive = trace > 0.0
+    if np.any(positive):
+        mats = flat[positive]
+        scale = 2.0 * np.sqrt(np.maximum(trace[positive] + 1.0, EPS))
+        q[positive, 3] = 0.25 * scale
+        q[positive, 0] = (mats[:, 2, 1] - mats[:, 1, 2]) / scale
+        q[positive, 1] = (mats[:, 0, 2] - mats[:, 2, 0]) / scale
+        q[positive, 2] = (mats[:, 1, 0] - mats[:, 0, 1]) / scale
+
+    nonpositive = ~positive
+    if np.any(nonpositive):
+        idxs = np.where(nonpositive)[0]
+        mats = flat[idxs]
+        diag = np.stack([mats[:, 0, 0], mats[:, 1, 1], mats[:, 2, 2]], axis=1)
+        largest = np.argmax(diag, axis=1)
+
+        for axis in range(3):
+            selected = largest == axis
+            if not np.any(selected):
+                continue
+            out_idx = idxs[selected]
+            m = mats[selected]
+            if axis == 0:
+                scale = 2.0 * np.sqrt(
+                    np.maximum(1.0 + m[:, 0, 0] - m[:, 1, 1] - m[:, 2, 2], EPS)
+                )
+                q[out_idx, 3] = (m[:, 2, 1] - m[:, 1, 2]) / scale
+                q[out_idx, 0] = 0.25 * scale
+                q[out_idx, 1] = (m[:, 0, 1] + m[:, 1, 0]) / scale
+                q[out_idx, 2] = (m[:, 0, 2] + m[:, 2, 0]) / scale
+            elif axis == 1:
+                scale = 2.0 * np.sqrt(
+                    np.maximum(1.0 + m[:, 1, 1] - m[:, 0, 0] - m[:, 2, 2], EPS)
+                )
+                q[out_idx, 3] = (m[:, 0, 2] - m[:, 2, 0]) / scale
+                q[out_idx, 0] = (m[:, 0, 1] + m[:, 1, 0]) / scale
+                q[out_idx, 1] = 0.25 * scale
+                q[out_idx, 2] = (m[:, 1, 2] + m[:, 2, 1]) / scale
+            else:
+                scale = 2.0 * np.sqrt(
+                    np.maximum(1.0 + m[:, 2, 2] - m[:, 0, 0] - m[:, 1, 1], EPS)
+                )
+                q[out_idx, 3] = (m[:, 1, 0] - m[:, 0, 1]) / scale
+                q[out_idx, 0] = (m[:, 0, 2] + m[:, 2, 0]) / scale
+                q[out_idx, 1] = (m[:, 1, 2] + m[:, 2, 1]) / scale
+                q[out_idx, 2] = 0.25 * scale
+
+    return canonicalize_quaternions(q.reshape(r.shape[:-2] + (4,)))
 
 
 def quaternions_to_rotations(quaternions: np.ndarray) -> np.ndarray:
     """Convert scalar-last quaternions shaped `(..., 4)` to rotation matrices."""
     q = canonicalize_quaternions(quaternions)
-    q = quaternion.from_float_array(_to_numpy_quaternion_order(q))
-    rotations = quaternion.as_rotation_matrix(q)
+    x = q[..., 0]
+    y = q[..., 1]
+    z = q[..., 2]
+    w = q[..., 3]
+
+    rotations = np.empty(q.shape[:-1] + (3, 3), dtype=np.float64)
+    rotations[..., 0, 0] = 1.0 - 2.0 * (y * y + z * z)
+    rotations[..., 0, 1] = 2.0 * (x * y - z * w)
+    rotations[..., 0, 2] = 2.0 * (x * z + y * w)
+    rotations[..., 1, 0] = 2.0 * (x * y + z * w)
+    rotations[..., 1, 1] = 1.0 - 2.0 * (x * x + z * z)
+    rotations[..., 1, 2] = 2.0 * (y * z - x * w)
+    rotations[..., 2, 0] = 2.0 * (x * z - y * w)
+    rotations[..., 2, 1] = 2.0 * (y * z + x * w)
+    rotations[..., 2, 2] = 1.0 - 2.0 * (x * x + y * y)
     return project_to_so3(rotations)
 
 

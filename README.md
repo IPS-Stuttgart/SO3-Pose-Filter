@@ -75,7 +75,7 @@ distribution = rotations_to_pyrecest_hyperhemisphere_dirac(
 ```
 
 PyRecEst is only imported inside the PyRecEst bridge helpers, so the existing NumPy-only workflow still
-runs without it installed. The rotation/quaternion conversions are backed by `numpy-quaternion`.
+runs without it installed.
 
 ## Config Fields
 
