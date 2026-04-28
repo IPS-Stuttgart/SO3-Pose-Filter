@@ -20,7 +20,6 @@ from .plotting import robustness_plot, trajectory_plot
 from .smoothing import SmootherConfig
 from .transitions import build_transition_model
 
-
 REQUIRED_CONFIG_FIELDS = {
     "data_root",
     "dataset_subset",
@@ -95,7 +94,10 @@ def run_experiment(config: dict) -> dict:
         test,
         model,
         [float(x) for x in config.get("robustness_noise_deg", [config["noise_deg"]])],
-        [float(x) for x in config.get("robustness_occlusion_prob", [config["occlusion_prob"]])],
+        [
+            float(x)
+            for x in config.get("robustness_occlusion_prob", [config["occlusion_prob"]])
+        ],
         int(config["num_particles"]),
         seed,
         proposal_gain=float(config.get("proposal_gain", 0.2)),
@@ -136,10 +138,18 @@ def run_experiment(config: dict) -> dict:
         },
         "transition_metrics": transition_rows,
         "filter_metrics_mean": {
-            "observed_error_deg": float(np.nanmean([r["observed_error_deg"] for r in filter_rows])),
-            "filter_error_deg": float(np.nanmean([r["filter_error_deg"] for r in filter_rows])),
-            "persistence_error_deg": float(np.nanmean([r["persistence_error_deg"] for r in filter_rows])),
-            "smoother_ema_error_deg": float(np.nanmean([r["smoother_ema_error_deg"] for r in filter_rows])),
+            "observed_error_deg": float(
+                np.nanmean([r["observed_error_deg"] for r in filter_rows])
+            ),
+            "filter_error_deg": float(
+                np.nanmean([r["filter_error_deg"] for r in filter_rows])
+            ),
+            "persistence_error_deg": float(
+                np.nanmean([r["persistence_error_deg"] for r in filter_rows])
+            ),
+            "smoother_ema_error_deg": float(
+                np.nanmean([r["smoother_ema_error_deg"] for r in filter_rows])
+            ),
             "smoother_chordal_error_deg": float(
                 np.nanmean([r["smoother_chordal_error_deg"] for r in filter_rows])
             ),
