@@ -6,8 +6,8 @@ matrices, creates synthetic noisy/occluded measurements, and evaluates transitio
 filter. It also reports cheap smoothing baselines so the particle filter is compared against simple temporal
 methods rather than only raw measurements.
 
-The code intentionally uses only NumPy and the Python standard library. The package source follows a
-PyRecEst-style `src/pose_filter` layout.
+The package source follows a PyRecEst-style `src/pose_filter` layout and reuses PyRecEst smoothing
+utilities for SO(3) temporal baselines.
 
 ## Quick Start
 

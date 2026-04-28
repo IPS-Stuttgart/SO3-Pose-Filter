@@ -1,23 +1,23 @@
-"""Cheap SO(3)^K smoothing baselines for noisy pose observations."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
+from pyrecest.filters import ManifoldExponentialMovingAverage  # type: ignore[import-untyped]
+from pyrecest.smoothers import SO3ChordalMeanSmoother  # type: ignore[import-untyped]
 
-from .so3 import chordal_mean, left_apply_delta, left_delta
+from .so3 import left_apply_delta, left_delta
 
 
 @dataclass(frozen=True)
 class SmootherConfig:
-    """Configuration for deterministic smoothing baselines."""
-
     ema_alpha: float = 0.35
     chordal_window: int = 5
 
 
-def _validate_inputs(observations: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _validate_inputs(
+    observations: np.ndarray, mask: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     observations = np.asarray(observations, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
     if observations.ndim != 4 or observations.shape[-2:] != (3, 3):
@@ -25,7 +25,9 @@ def _validate_inputs(observations: np.ndarray, mask: np.ndarray) -> tuple[np.nda
             f"expected observations shaped (T, J, 3, 3), got {observations.shape}"
         )
     if mask.shape != observations.shape[:2]:
-        raise ValueError(f"expected mask shaped {observations.shape[:2]}, got {mask.shape}")
+        raise ValueError(
+            f"expected mask shaped {observations.shape[:2]}, got {mask.shape}"
+        )
     return observations, mask
 
 
@@ -38,11 +40,7 @@ def tangent_exponential_smoother(
     mask: np.ndarray,
     alpha: float = 0.35,
 ) -> np.ndarray:
-    """Causal per-joint EMA in the tangent space of the previous estimate.
-
-    Observed joints move by `alpha * log_Rprev(Robs)`. Hidden joints keep the
-    previous estimate.
-    """
+    """Causal per-joint PyRecEst manifold EMA over visible observations."""
 
     observations, mask = _validate_inputs(observations, mask)
     alpha = float(alpha)
@@ -51,16 +49,19 @@ def tangent_exponential_smoother(
 
     t_steps, num_joints = observations.shape[:2]
     estimates = np.empty_like(observations)
-    current = _identity_pose(num_joints)
+    previous = _identity_pose(num_joints)
+    ema = ManifoldExponentialMovingAverage(
+        initial_state=None,
+        alpha=alpha,
+        phi=lambda rotations, delta: left_apply_delta(delta, rotations),
+        phi_inv=left_delta,
+    )
 
     for t in range(t_steps):
-        if t == 0:
-            current = np.where(mask[t, :, None, None], observations[t], current)
-        else:
-            delta = left_delta(current, observations[t])
-            updated = left_apply_delta(alpha * delta, current)
-            current = np.where(mask[t, :, None, None], updated, current)
-        estimates[t] = current
+        sample = np.where(mask[t, :, None, None], observations[t], previous)
+        ema.update(sample)
+        previous = np.asarray(ema.get_point_estimate(), dtype=np.float64)
+        estimates[t] = previous
 
     return estimates
 
@@ -70,12 +71,7 @@ def sliding_chordal_mean_smoother(
     mask: np.ndarray,
     window: int = 5,
 ) -> np.ndarray:
-    """Offline centered-window chordal mean for each joint.
-
-    Only visible observations inside the local window contribute. If no
-    observation for a joint is available in a window, the previous smoothed pose
-    is carried forward, with identity as the initial fallback.
-    """
+    """Offline per-joint PyRecEst chordal mean over visible local windows."""
 
     observations, mask = _validate_inputs(observations, mask)
     window = int(window)
@@ -95,7 +91,7 @@ def sliding_chordal_mean_smoother(
             visible = mask[start:stop, joint_idx]
             if np.any(visible):
                 local = observations[start:stop, joint_idx][visible]
-                current[joint_idx] = chordal_mean(local[:, None, :, :])[0]
+                current[joint_idx] = SO3ChordalMeanSmoother.chordal_mean(local)
             else:
                 current[joint_idx] = previous[joint_idx]
         estimates[t] = current
@@ -109,8 +105,6 @@ def run_baseline_smoothers(
     mask: np.ndarray,
     config: SmootherConfig | None = None,
 ) -> dict[str, np.ndarray]:
-    """Run all deterministic smoothing baselines used in experiment reports."""
-
     config = config or SmootherConfig()
     return {
         "smoother_ema": tangent_exponential_smoother(
