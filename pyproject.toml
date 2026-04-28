@@ -5,14 +5,27 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "so3-pose-filter"
 version = "0.1.0"
-description = "Dependency-light SO(3)^K motion filtering prototype for AMASS/SMPL pose sequences."
+description = "Prototype for recursive Bayesian filtering of human pose trajectories on SO(3)^K."
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = [
-    "numpy>=1.24",
-]
+requires-python = ">=3.11"
+authors = [{ name = "Florian Pfaff" }]
+dependencies = ["numpy>=1.24"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["pose_filter*"]
+where = ["src"]
 
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+mypy_path = "src"
