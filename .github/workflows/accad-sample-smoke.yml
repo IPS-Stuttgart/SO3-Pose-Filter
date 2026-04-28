@@ -1,6 +1,7 @@
 name: ACCAD AMASS Sample Smoke
 
 on:
+  pull_request:
   workflow_dispatch:
 
 permissions:
