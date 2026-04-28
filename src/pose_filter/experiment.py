@@ -9,6 +9,7 @@ import numpy as np
 
 from .data import load_dataset, split_sequences
 from .evaluation import (
+    ablation_rows,
     evaluate_filter,
     robustness_rows,
     trajectory_preview_rows,
@@ -42,10 +43,25 @@ def load_config(path: str | Path) -> dict:
     return config
 
 
+def _list_config(config: dict, key: str, default: list) -> list:
+    value = config.get(key, default)
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
 def run_experiment(config: dict) -> dict:
     seed = int(config.get("seed", 0))
     output_dir = Path(config.get("output_dir", "runs/default"))
     output_dir.mkdir(parents=True, exist_ok=True)
+    proposal_gain = float(config.get("proposal_gain", 0.2))
+    factorized_update = bool(config.get("factorized_update", True))
+    resample_threshold = float(config.get("resample_threshold", 0.5))
+    noise_deg = float(config["noise_deg"])
+    occlusion_prob = float(config["occlusion_prob"])
+    num_particles = int(config["num_particles"])
 
     sequences = load_dataset(
         config["data_root"],
@@ -80,42 +96,63 @@ def run_experiment(config: dict) -> dict:
         test,
         rollout_horizon=int(config.get("rollout_horizon", 10)),
     )
+    default_ablation_particle_counts = sorted({max(8, num_particles // 2), num_particles, max(8, num_particles * 2)})
     filter_rows = evaluate_filter(
         test,
         model,
-        float(config["noise_deg"]),
-        float(config["occlusion_prob"]),
-        int(config["num_particles"]),
+        noise_deg,
+        occlusion_prob,
+        num_particles,
         seed,
-        proposal_gain=float(config.get("proposal_gain", 0.2)),
+        proposal_gain=proposal_gain,
+        factorized_update=factorized_update,
+        resample_threshold=resample_threshold,
+        smoother_config=smoother_config,
+    )
+    ablations = ablation_rows(
+        test,
+        model,
+        noise_deg,
+        occlusion_prob,
+        num_particles,
+        seed + 7717,
+        base_proposal_gain=proposal_gain,
+        base_factorized_update=factorized_update,
+        base_resample_threshold=resample_threshold,
+        particle_counts=[int(x) for x in _list_config(config, "ablation_particle_counts", default_ablation_particle_counts)],
+        proposal_gains=[float(x) for x in _list_config(config, "ablation_proposal_gains", [0.0, proposal_gain])],
+        factorized_updates=[bool(x) for x in _list_config(config, "ablation_factorized_updates", [False, True])],
+        resample_thresholds=[float(x) for x in _list_config(config, "ablation_resample_thresholds", [resample_threshold])],
         smoother_config=smoother_config,
     )
     robust_rows = robustness_rows(
         test,
         model,
         [float(x) for x in config.get("robustness_noise_deg", [config["noise_deg"]])],
-        [
-            float(x)
-            for x in config.get("robustness_occlusion_prob", [config["occlusion_prob"]])
-        ],
-        int(config["num_particles"]),
+        [float(x) for x in config.get("robustness_occlusion_prob", [config["occlusion_prob"]])],
+        num_particles,
         seed,
-        proposal_gain=float(config.get("proposal_gain", 0.2)),
+        proposal_gain=proposal_gain,
+        factorized_update=factorized_update,
+        resample_threshold=resample_threshold,
         smoother_config=smoother_config,
     )
     preview_rows = trajectory_preview_rows(
         test[0],
         model,
-        float(config["noise_deg"]),
-        float(config["occlusion_prob"]),
-        int(config["num_particles"]),
+        noise_deg,
+        occlusion_prob,
+        num_particles,
         seed + 4242,
-        proposal_gain=float(config.get("proposal_gain", 0.2)),
+        proposal_gain=proposal_gain,
+        factorized_update=factorized_update,
+        resample_threshold=resample_threshold,
         smoother_config=smoother_config,
     )
 
     write_csv(output_dir / "transition_metrics.csv", transition_rows)
     write_csv(output_dir / "filter_metrics.csv", filter_rows)
+    write_csv(output_dir / "ablation_metrics.csv", ablations)
     write_csv(output_dir / "robustness_metrics.csv", robust_rows)
     write_csv(output_dir / "trajectory_preview.csv", preview_rows)
     robustness_plot(output_dir / "plots" / "robustness.svg", robust_rows)
@@ -127,37 +164,31 @@ def run_experiment(config: dict) -> dict:
         "splits": {"train": len(train), "val": len(val), "test": len(test)},
         "frame_rate": int(config["frame_rate"]),
         "num_joints": int(config["num_joints"]),
-        "noise_deg": float(config["noise_deg"]),
-        "occlusion_prob": float(config["occlusion_prob"]),
-        "num_particles": int(config["num_particles"]),
+        "noise_deg": noise_deg,
+        "occlusion_prob": occlusion_prob,
+        "num_particles": num_particles,
         "process_noise_deg": config.get("process_noise_deg"),
-        "proposal_gain": float(config.get("proposal_gain", 0.2)),
+        "proposal_gain": proposal_gain,
+        "factorized_update": factorized_update,
+        "resample_threshold": resample_threshold,
         "smoothers": {
             "ema_alpha": smoother_config.ema_alpha,
             "chordal_window": smoother_config.chordal_window,
         },
         "transition_metrics": transition_rows,
         "filter_metrics_mean": {
-            "observed_error_deg": float(
-                np.nanmean([r["observed_error_deg"] for r in filter_rows])
-            ),
-            "filter_error_deg": float(
-                np.nanmean([r["filter_error_deg"] for r in filter_rows])
-            ),
-            "persistence_error_deg": float(
-                np.nanmean([r["persistence_error_deg"] for r in filter_rows])
-            ),
-            "smoother_ema_error_deg": float(
-                np.nanmean([r["smoother_ema_error_deg"] for r in filter_rows])
-            ),
-            "smoother_chordal_error_deg": float(
-                np.nanmean([r["smoother_chordal_error_deg"] for r in filter_rows])
-            ),
+            "observed_error_deg": float(np.nanmean([r["observed_error_deg"] for r in filter_rows])),
+            "filter_error_deg": float(np.nanmean([r["filter_error_deg"] for r in filter_rows])),
+            "persistence_error_deg": float(np.nanmean([r["persistence_error_deg"] for r in filter_rows])),
+            "smoother_ema_error_deg": float(np.nanmean([r["smoother_ema_error_deg"] for r in filter_rows])),
+            "smoother_chordal_error_deg": float(np.nanmean([r["smoother_chordal_error_deg"] for r in filter_rows])),
             "mean_ess": float(np.nanmean([r["mean_ess"] for r in filter_rows])),
         },
+        "ablation_metrics": ablations,
         "outputs": {
             "transition_metrics": str(output_dir / "transition_metrics.csv"),
             "filter_metrics": str(output_dir / "filter_metrics.csv"),
+            "ablation_metrics": str(output_dir / "ablation_metrics.csv"),
             "robustness_metrics": str(output_dir / "robustness_metrics.csv"),
             "trajectory_preview": str(output_dir / "trajectory_preview.csv"),
             "plots": str(output_dir / "plots"),

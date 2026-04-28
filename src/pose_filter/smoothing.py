@@ -15,19 +15,13 @@ class SmootherConfig:
     chordal_window: int = 5
 
 
-def _validate_inputs(
-    observations: np.ndarray, mask: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+def _validate_inputs(observations: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     observations = np.asarray(observations, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
     if observations.ndim != 4 or observations.shape[-2:] != (3, 3):
-        raise ValueError(
-            f"expected observations shaped (T, J, 3, 3), got {observations.shape}"
-        )
+        raise ValueError(f"expected observations shaped (T, J, 3, 3), got {observations.shape}")
     if mask.shape != observations.shape[:2]:
-        raise ValueError(
-            f"expected mask shaped {observations.shape[:2]}, got {mask.shape}"
-        )
+        raise ValueError(f"expected mask shaped {observations.shape[:2]}, got {mask.shape}")
     return observations, mask
 
 
@@ -107,10 +101,6 @@ def run_baseline_smoothers(
 ) -> dict[str, np.ndarray]:
     config = config or SmootherConfig()
     return {
-        "smoother_ema": tangent_exponential_smoother(
-            observations, mask, alpha=config.ema_alpha
-        ),
-        "smoother_chordal": sliding_chordal_mean_smoother(
-            observations, mask, window=config.chordal_window
-        ),
+        "smoother_ema": tangent_exponential_smoother(observations, mask, alpha=config.ema_alpha),
+        "smoother_chordal": sliding_chordal_mean_smoother(observations, mask, window=config.chordal_window),
     }

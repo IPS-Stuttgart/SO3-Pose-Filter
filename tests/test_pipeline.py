@@ -6,8 +6,8 @@ from pathlib import Path
 
 import numpy as np
 from _path import SRC  # noqa: F401
-
 from pose_filter.data import load_dataset, split_sequences
+from pose_filter.evaluation import ablation_rows
 from pose_filter.measurements import make_synthetic_measurements
 from pose_filter.particle_filter import run_particle_filter
 from pose_filter.transitions import (
@@ -60,8 +60,27 @@ class PipelineTests(unittest.TestCase):
                     meas.noise_sigma_rad,
                     num_particles=16,
                     rng=rng,
+                    factorized_update=False,
+                    resample_threshold=0.75,
                 )
                 self.assertEqual(result.estimates.shape, test[0].rotations.shape)
+            rows = ablation_rows(
+                test,
+                models[1],
+                noise_deg=10.0,
+                occlusion_prob=0.2,
+                base_num_particles=16,
+                seed=17,
+                base_proposal_gain=0.2,
+                base_factorized_update=True,
+                base_resample_threshold=0.5,
+                particle_counts=[8],
+                proposal_gains=[0.0],
+                factorized_updates=[False],
+                resample_thresholds=[0.25],
+            )
+            self.assertTrue(any(row["ablation"] == "proposal_gain" and row["value"] == "0" for row in rows))
+            self.assertTrue(any(row["ablation"] == "factorized_update" for row in rows))
 
     def test_filter_evaluation_reports_smoother_baselines(self) -> None:
         from pose_filter.evaluation import evaluate_filter_sequence
