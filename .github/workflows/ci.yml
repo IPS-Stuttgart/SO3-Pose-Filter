@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Python ${{ matrix.python-version }}
@@ -35,4 +38,3 @@ jobs:
         run: |
           python scripts/make_toy_amass.py --output data/tiny_amass --sequences 6 --frames 80
           python scripts/run_experiment.py --config configs/example.json
-
