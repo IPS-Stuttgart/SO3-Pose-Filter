@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from typing import NamedTuple, TypeVar
 
 import numpy as np
 
@@ -18,6 +19,15 @@ from .transitions import (
     one_step_error_deg,
     rollout_error_deg,
 )
+
+_T = TypeVar("_T")
+
+
+class _FilterConfig(NamedTuple):
+    num_particles: int
+    proposal_gain: float
+    factorized_update: bool
+    resample_threshold: float
 
 
 def write_json(path: str | Path, payload: dict) -> None:
@@ -122,8 +132,8 @@ def evaluate_filter(
     return rows
 
 
-def _unique_preserve_order(values: list) -> list:
-    unique = []
+def _unique_preserve_order(values: list[_T]) -> list[_T]:
+    unique: list[_T] = []
     for value in values:
         if value not in unique:
             unique.append(value)
@@ -163,33 +173,33 @@ def ablation_rows(
 ) -> list[dict]:
     """Run one-axis-at-a-time filter ablations around the configured baseline."""
 
-    base = {
-        "num_particles": int(base_num_particles),
-        "proposal_gain": float(base_proposal_gain),
-        "factorized_update": bool(base_factorized_update),
-        "resample_threshold": float(base_resample_threshold),
-    }
+    base = _FilterConfig(
+        num_particles=int(base_num_particles),
+        proposal_gain=float(base_proposal_gain),
+        factorized_update=bool(base_factorized_update),
+        resample_threshold=float(base_resample_threshold),
+    )
     variants = [("baseline", "baseline", base)]
 
     for count in _unique_preserve_order(
-        [base["num_particles"], *[int(x) for x in particle_counts]]
+        [base.num_particles, *[int(x) for x in particle_counts]]
     ):
-        cfg = {**base, "num_particles": count}
+        cfg = base._replace(num_particles=count)
         variants.append(("num_particles", str(count), cfg))
     for gain in _unique_preserve_order(
-        [0.0, base["proposal_gain"], *[float(x) for x in proposal_gains]]
+        [0.0, base.proposal_gain, *[float(x) for x in proposal_gains]]
     ):
-        cfg = {**base, "proposal_gain": gain}
+        cfg = base._replace(proposal_gain=gain)
         variants.append(("proposal_gain", f"{gain:g}", cfg))
     for enabled in _unique_preserve_order(
-        [False, base["factorized_update"], *[bool(x) for x in factorized_updates]]
+        [False, base.factorized_update, *[bool(x) for x in factorized_updates]]
     ):
-        cfg = {**base, "factorized_update": enabled}
+        cfg = base._replace(factorized_update=enabled)
         variants.append(("factorized_update", str(enabled).lower(), cfg))
     for threshold in _unique_preserve_order(
-        [base["resample_threshold"], *[float(x) for x in resample_thresholds]]
+        [base.resample_threshold, *[float(x) for x in resample_thresholds]]
     ):
-        cfg = {**base, "resample_threshold": threshold}
+        cfg = base._replace(resample_threshold=threshold)
         variants.append(("resample_threshold", f"{threshold:g}", cfg))
 
     rows = []
@@ -198,10 +208,10 @@ def ablation_rows(
         key = (
             ablation,
             value,
-            cfg["num_particles"],
-            cfg["proposal_gain"],
-            cfg["factorized_update"],
-            cfg["resample_threshold"],
+            cfg.num_particles,
+            cfg.proposal_gain,
+            cfg.factorized_update,
+            cfg.resample_threshold,
         )
         if key in seen:
             continue
@@ -211,20 +221,20 @@ def ablation_rows(
             transition_model,
             noise_deg,
             occlusion_prob,
-            cfg["num_particles"],
+            cfg.num_particles,
             seed,
-            proposal_gain=cfg["proposal_gain"],
-            factorized_update=cfg["factorized_update"],
-            resample_threshold=cfg["resample_threshold"],
+            proposal_gain=cfg.proposal_gain,
+            factorized_update=cfg.factorized_update,
+            resample_threshold=cfg.resample_threshold,
         )
         rows.append(
             {
                 "ablation": ablation,
                 "value": value,
-                "num_particles": cfg["num_particles"],
-                "proposal_gain": cfg["proposal_gain"],
-                "factorized_update": cfg["factorized_update"],
-                "resample_threshold": cfg["resample_threshold"],
+                "num_particles": cfg.num_particles,
+                "proposal_gain": cfg.proposal_gain,
+                "factorized_update": cfg.factorized_update,
+                "resample_threshold": cfg.resample_threshold,
                 **_mean_row(filter_rows),
             }
         )
