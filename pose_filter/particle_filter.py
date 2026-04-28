@@ -33,7 +33,9 @@ def _normalize_log_weights(log_weights: np.ndarray) -> tuple[np.ndarray, np.ndar
     return weights, np.log(weights + 1e-300)
 
 
-def _normalize_log_weights_axis0(log_weights: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _normalize_log_weights_axis0(
+    log_weights: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
     shifted = log_weights - np.max(log_weights, axis=0, keepdims=True)
     weights = np.exp(shifted)
     weights = weights / np.sum(weights, axis=0, keepdims=True)
@@ -45,7 +47,9 @@ def _prepare_confidence(mask: np.ndarray, confidence: np.ndarray | None) -> np.n
         return mask.astype(np.float64)
     confidence = np.asarray(confidence, dtype=np.float64)
     if confidence.shape != mask.shape:
-        raise ValueError(f"expected confidence shaped {mask.shape}, got {confidence.shape}")
+        raise ValueError(
+            f"expected confidence shaped {mask.shape}, got {confidence.shape}"
+        )
     if np.any(~np.isfinite(confidence)):
         raise ValueError("confidence values must be finite")
     if np.any((confidence < 0.0) | (confidence > 1.0)):
@@ -64,7 +68,9 @@ def _prepare_joint_noise(
     if sigma.shape == ():
         sigma = np.full(mask.shape, float(sigma), dtype=np.float64)
     elif sigma.shape != mask.shape:
-        raise ValueError(f"expected joint_noise_sigma_rad shaped {mask.shape}, got {sigma.shape}")
+        raise ValueError(
+            f"expected joint_noise_sigma_rad shaped {mask.shape}, got {sigma.shape}"
+        )
     if np.any(~np.isfinite(sigma)) or np.any(sigma <= 0.0):
         raise ValueError("joint_noise_sigma_rad values must be positive and finite")
     return np.maximum(sigma, 1e-8)
@@ -118,7 +124,9 @@ def run_particle_filter(
     observations = np.asarray(observations, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
     confidence = _prepare_confidence(mask, confidence)
-    joint_noise_sigma_rad = _prepare_joint_noise(noise_sigma_rad, mask, joint_noise_sigma_rad)
+    joint_noise_sigma_rad = _prepare_joint_noise(
+        noise_sigma_rad, mask, joint_noise_sigma_rad
+    )
     t_steps = observations.shape[0]
     particles = initialize_particles(
         observations[0], confidence[0] > 0.0, num_particles, noise_sigma_rad, rng
@@ -175,9 +183,13 @@ def run_particle_filter(
         if should_resample and t < t_steps - 1:
             idx = systematic_resample(weights, rng)
             particles = particles[idx]
-            log_weights = np.full(num_particles, -np.log(num_particles), dtype=np.float64)
+            log_weights = np.full(
+                num_particles, -np.log(num_particles), dtype=np.float64
+            )
             log_joint_weights = np.full(
-                (num_particles, observations.shape[1]), -np.log(num_particles), dtype=np.float64
+                (num_particles, observations.shape[1]),
+                -np.log(num_particles),
+                dtype=np.float64,
             )
 
     return ParticleFilterResult(

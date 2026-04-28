@@ -39,7 +39,9 @@ def _source_fps(npz: np.lib.npyio.NpzFile) -> float:
     return 60.0
 
 
-def load_amass_sequence(path: str | Path, frame_rate: int = 20, num_joints: int = 23) -> PoseSequence:
+def load_amass_sequence(
+    path: str | Path, frame_rate: int = 20, num_joints: int = 23
+) -> PoseSequence:
     """Load one AMASS/SMPL `.npz` file as `[T, J, 3, 3]` local body rotations."""
     path = Path(path)
     with np.load(path, allow_pickle=False) as npz:
@@ -51,7 +53,9 @@ def load_amass_sequence(path: str | Path, frame_rate: int = 20, num_joints: int 
         raise ValueError(f"{path} poses must be shaped [T, D], got {poses.shape}")
     needed = 3 + num_joints * 3
     if poses.shape[1] < needed:
-        raise ValueError(f"{path} poses has {poses.shape[1]} dims, need at least {needed}")
+        raise ValueError(
+            f"{path} poses has {poses.shape[1]} dims, need at least {needed}"
+        )
 
     stride = max(1, int(round(fps / float(frame_rate))))
     body_axis_angle = poses[::stride, 3:needed].reshape(-1, num_joints, 3)
@@ -80,7 +84,9 @@ def load_dataset(
     errors: list[str] = []
     for path in files:
         try:
-            seq = load_amass_sequence(path, frame_rate=frame_rate, num_joints=num_joints)
+            seq = load_amass_sequence(
+                path, frame_rate=frame_rate, num_joints=num_joints
+            )
             if seq.rotations.shape[0] >= min_frames:
                 sequences.append(seq)
         except Exception as exc:  # Keep scanning mixed AMASS directories.
@@ -110,7 +116,11 @@ def split_sequences(
     if n_train + n_val >= n:
         n_train = max(1, n - 2)
         n_val = 1
-    return shuffled[:n_train], shuffled[n_train : n_train + n_val], shuffled[n_train + n_val :]
+    return (
+        shuffled[:n_train],
+        shuffled[n_train : n_train + n_val],
+        shuffled[n_train + n_val :],
+    )
 
 
 def sequence_pairs(sequences: Iterable[PoseSequence]) -> tuple[np.ndarray, np.ndarray]:

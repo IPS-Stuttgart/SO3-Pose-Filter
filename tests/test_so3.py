@@ -4,7 +4,11 @@ import unittest
 
 import numpy as np
 
-from pose_filter.so3 import axis_angle_to_matrix, geodesic_distance, matrix_to_axis_angle
+from pose_filter.so3 import (
+    axis_angle_to_matrix,
+    geodesic_distance,
+    matrix_to_axis_angle,
+)
 
 
 class SO3Tests(unittest.TestCase):

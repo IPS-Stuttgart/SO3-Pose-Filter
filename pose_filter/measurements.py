@@ -17,11 +17,15 @@ class SyntheticMeasurements:
     confidence: np.ndarray
 
 
-def validate_confidence(confidence: np.ndarray, expected_shape: tuple[int, ...]) -> np.ndarray:
+def validate_confidence(
+    confidence: np.ndarray, expected_shape: tuple[int, ...]
+) -> np.ndarray:
     """Validate detector-style confidence values in [0, 1]."""
     confidence = np.asarray(confidence, dtype=np.float64)
     if confidence.shape != expected_shape:
-        raise ValueError(f"expected confidence shaped {expected_shape}, got {confidence.shape}")
+        raise ValueError(
+            f"expected confidence shaped {expected_shape}, got {confidence.shape}"
+        )
     if np.any(~np.isfinite(confidence)):
         raise ValueError("confidence values must be finite")
     if np.any((confidence < 0.0) | (confidence > 1.0)):
@@ -88,7 +92,9 @@ def log_likelihood(
         if sigma.shape == ():
             sigma = max(float(sigma), 1e-8)
         elif sigma.shape != active.shape:
-            raise ValueError(f"expected joint_noise_sigma_rad shaped {active.shape}, got {sigma.shape}")
+            raise ValueError(
+                f"expected joint_noise_sigma_rad shaped {active.shape}, got {sigma.shape}"
+            )
         elif np.any(sigma <= 0.0) or np.any(~np.isfinite(sigma)):
             raise ValueError("joint_noise_sigma_rad values must be positive and finite")
     dist = geodesic_distance(states, observations)

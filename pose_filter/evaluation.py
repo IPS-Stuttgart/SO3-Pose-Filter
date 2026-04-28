@@ -68,12 +68,12 @@ def evaluate_filter_sequence(
         confidence=measurements.confidence,
     )
     persistence = PersistenceTransition()
-    persistence_estimates = [seq.rotations[0]]
+    persistence_estimates_list = [seq.rotations[0]]
     x = seq.rotations[0]
     for _ in range(1, seq.rotations.shape[0]):
         x = persistence.deterministic_next(x)
-        persistence_estimates.append(x)
-    persistence_estimates = np.asarray(persistence_estimates)
+        persistence_estimates_list.append(x)
+    persistence_estimates = np.asarray(persistence_estimates_list)
 
     return {
         "sequence": seq.name,
@@ -88,7 +88,9 @@ def evaluate_filter_sequence(
             confidence=measurements.confidence,
         ),
         "filter_error_deg": mean_joint_distance_deg(seq.rotations, result.estimates),
-        "persistence_error_deg": mean_joint_distance_deg(seq.rotations, persistence_estimates),
+        "persistence_error_deg": mean_joint_distance_deg(
+            seq.rotations, persistence_estimates
+        ),
         "mean_ess": float(np.mean(result.effective_sample_size)),
         "resample_count": int(np.sum(result.resampled)),
     }
@@ -173,10 +175,18 @@ def robustness_rows(
                 {
                     "noise_deg": float(noise),
                     "occlusion_prob": float(occ),
-                    "mean_confidence": float(np.nanmean([r["mean_confidence"] for r in result_rows])),
-                    "observed_error_deg": float(np.nanmean([r["observed_error_deg"] for r in result_rows])),
-                    "filter_error_deg": float(np.nanmean([r["filter_error_deg"] for r in result_rows])),
-                    "persistence_error_deg": float(np.nanmean([r["persistence_error_deg"] for r in result_rows])),
+                    "mean_confidence": float(
+                        np.nanmean([r["mean_confidence"] for r in result_rows])
+                    ),
+                    "observed_error_deg": float(
+                        np.nanmean([r["observed_error_deg"] for r in result_rows])
+                    ),
+                    "filter_error_deg": float(
+                        np.nanmean([r["filter_error_deg"] for r in result_rows])
+                    ),
+                    "persistence_error_deg": float(
+                        np.nanmean([r["persistence_error_deg"] for r in result_rows])
+                    ),
                     "mean_ess": float(np.nanmean([r["mean_ess"] for r in result_rows])),
                 }
             )
@@ -222,10 +232,16 @@ def trajectory_preview_rows(
         rows.append(
             {
                 "frame": t,
-                "observed_error_deg": float(np.degrees(np.mean(observed))) if observed.size else float("nan"),
-                "mean_observed_confidence": float(np.mean(observed_confidence))
-                if observed_confidence.size
-                else float("nan"),
+                "observed_error_deg": (
+                    float(np.degrees(np.mean(observed)))
+                    if observed.size
+                    else float("nan")
+                ),
+                "mean_observed_confidence": (
+                    float(np.mean(observed_confidence))
+                    if observed_confidence.size
+                    else float("nan")
+                ),
                 "filter_error_deg": float(np.degrees(np.mean(dist_filter[t]))),
                 "observed_joint_fraction": float(np.mean(measurements.mask[t])),
                 "ess": float(result.effective_sample_size[t]),
