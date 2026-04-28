@@ -18,11 +18,11 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.black]
-line-length = 88
+line-length = 180
 target-version = ["py311"]
 
 [tool.ruff]
-line-length = 88
+line-length = 180
 target-version = "py311"
 
 [tool.mypy]
