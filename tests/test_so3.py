@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 import numpy as np
+from _path import SRC  # noqa: F401
 
 from pose_filter.so3 import (
     axis_angle_to_matrix,
