@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "so3-pose-filter"
+version = "0.1.0"
+description = "Prototype for recursive Bayesian filtering of human pose trajectories on SO(3)^K."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Florian Pfaff" }]
+dependencies = ["numpy"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+mypy_path = "src"
