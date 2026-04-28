@@ -19,5 +19,11 @@
   "process_noise_deg": 3.0,
   "proposal_gain": 0.2,
   "confidence_noise_std": 0.15,
-  "min_confidence": 0.35
+  "min_confidence": 0.35,
+  "factorized_update": true,
+  "resample_threshold": 0.5,
+  "ablation_particle_counts": [64, 128, 256],
+  "ablation_proposal_gains": [0.0, 0.2],
+  "ablation_factorized_updates": [false, true],
+  "ablation_resample_thresholds": [0.25, 0.5, 0.75]
 }

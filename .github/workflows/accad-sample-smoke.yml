@@ -1,0 +1,303 @@
+name: ACCAD AMASS Sample Smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  accad-sample-smoke:
+    name: Download ACCAD sample and run smoke experiment
+    runs-on: ubuntu-latest
+    env:
+      SAMPLE_URL: ${{ secrets.AMASS_ACCAD_SAMPLE }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Download and validate AMASS sample
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import base64
+          import html
+          import json
+          import os
+          import re
+          import shutil
+          import urllib.parse
+          import urllib.request
+          import zipfile
+          from pathlib import Path
+
+          import numpy as np
+
+          sample_url = os.environ.get("SAMPLE_URL", "").strip()
+          if not sample_url:
+              raise SystemExit("AMASS_ACCAD_SAMPLE secret is empty or missing")
+
+          target_dir = Path("data/accad_secret_sample")
+          target_dir.mkdir(parents=True, exist_ok=True)
+
+          def is_amass_npz(path: Path) -> tuple[bool, dict]:
+              try:
+                  with np.load(path, allow_pickle=False) as data:
+                      keys = set(data.files)
+                      if "poses" not in keys:
+                          return False, {"keys": sorted(keys)}
+                      poses_shape = tuple(data["poses"].shape)
+                      ok = (
+                          len(poses_shape) == 2
+                          and poses_shape[0] >= 2
+                          and poses_shape[1] >= 72
+                      )
+                      return ok, {
+                          "keys": sorted(keys),
+                          "poses_shape": poses_shape,
+                          "mocap_framerate": float(
+                              np.asarray(
+                                  data[
+                                      "mocap_framerate"
+                                      if "mocap_framerate" in keys
+                                      else "mocap_frame_rate"
+                                  ]
+                              ).reshape(-1)[0]
+                          )
+                          if keys.intersection(
+                              {"mocap_framerate", "mocap_frame_rate"}
+                          )
+                          else None,
+                      }
+              except Exception as exc:
+                  return False, {"error": str(exc)}
+
+          def public_share_filename(url: str) -> str | None:
+              try:
+                  request = urllib.request.Request(
+                      url,
+                      headers={"User-Agent": "SO3-Pose-Filter-CI/1.0"},
+                  )
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      page = response.read(2_000_000).decode("utf-8", "replace")
+              except Exception:
+                  return None
+
+              match = re.search(
+                  r'id="initial-state-files_sharing-filename"\s+value="([^"]+)"',
+                  page,
+              )
+              if not match:
+                  return None
+              try:
+                  encoded = html.unescape(match.group(1))
+                  decoded = base64.b64decode(encoded).decode("utf-8")
+              except Exception:
+                  return None
+              return decoded or None
+
+          def candidate_urls(url: str) -> list[str]:
+              out = [url]
+              parsed = urllib.parse.urlparse(url)
+              if not parsed.scheme:
+                  return out
+              clean = url.rstrip("/")
+              out.extend([f"{clean}/download", f"{clean}?download=1"])
+              match = re.search(r"/s/([^/?#]+)", parsed.path)
+              if match:
+                  token = match.group(1)
+                  base = f"{parsed.scheme}://{parsed.netloc}"
+                  filename = public_share_filename(url)
+                  if filename:
+                      quoted_filename = urllib.parse.quote(filename)
+                      out.extend(
+                          [
+                              f"{clean}/download/{quoted_filename}",
+                              f"{base}/s/{token}/download/{quoted_filename}",
+                              f"{base}/index.php/s/{token}/download/{quoted_filename}",
+                          ]
+                      )
+                  out.extend(
+                      [
+                          f"{base}/s/{token}/download",
+                          f"{base}/index.php/s/{token}/download",
+                          f"{base}/public.php/dav/files/{token}",
+                      ]
+                  )
+              return list(dict.fromkeys(out))
+
+          def download(url: str, destination: Path) -> None:
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "User-Agent": "SO3-Pose-Filter-CI/1.0",
+                      "Accept": "application/octet-stream,*/*",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  with destination.open("wb") as handle:
+                      shutil.copyfileobj(response, handle)
+
+          errors: list[str] = []
+          selected: Path | None = None
+          selected_meta: dict | None = None
+
+          for idx, url in enumerate(candidate_urls(sample_url)):
+              raw_path = target_dir / f"candidate_{idx}"
+              try:
+                  download(url, raw_path)
+                  ok, meta = is_amass_npz(raw_path)
+                  if ok:
+                      selected = target_dir / "sample.npz"
+                      raw_path.replace(selected)
+                      selected_meta = meta
+                  elif zipfile.is_zipfile(raw_path):
+                      extract_dir = target_dir / f"candidate_{idx}_unzipped"
+                      with zipfile.ZipFile(raw_path) as archive:
+                          archive.extractall(extract_dir)
+                      for npz_path in extract_dir.rglob("*.npz"):
+                          ok, meta = is_amass_npz(npz_path)
+                          if ok:
+                              selected, selected_meta = npz_path, meta
+                              break
+                  if selected is not None:
+                      break
+                  errors.append(f"{url}: downloaded but not an AMASS .npz")
+              except Exception as exc:
+                  errors.append(f"{url}: {exc}")
+
+          if selected is None or selected_meta is None:
+              raise SystemExit(
+                  "Could not download a valid AMASS .npz from AMASS_ACCAD_SAMPLE. "
+                  "Use a direct .npz/archive download URL if the public share page "
+                  "does not expose raw file bytes.\n"
+                  + "\n".join(errors)
+              )
+
+          final_path = target_dir / "sample.npz"
+          if selected != final_path:
+              shutil.copy2(selected, final_path)
+          report = {
+              "sample_path": str(final_path),
+              "metadata": selected_meta,
+              "source": "AMASS_ACCAD_SAMPLE secret",
+          }
+          Path("runs").mkdir(exist_ok=True)
+          Path("runs/accad_sample_download_report.json").write_text(
+              json.dumps(report, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Build trimmed smoke subset and config
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          import numpy as np
+
+          source = Path("data/accad_secret_sample/sample.npz")
+          trimmed_dir = Path("data/accad_secret_sample_trimmed")
+          trimmed_dir.mkdir(parents=True, exist_ok=True)
+          trimmed = trimmed_dir / "sample_trimmed.npz"
+
+          with np.load(source, allow_pickle=False) as data:
+              poses = data["poses"]
+              n_frames = min(int(poses.shape[0]), 240)
+              payload = {}
+              for key in data.files:
+                  value = data[key]
+                  if value.shape[:1] == poses.shape[:1]:
+                      payload[key] = value[:n_frames]
+                  else:
+                      payload[key] = value
+          np.savez(trimmed, **payload)
+
+          config = {
+              "data_root": str(trimmed_dir),
+              "dataset_subset": "",
+              "frame_rate": 20,
+              "num_joints": 23,
+              "noise_deg": 12.0,
+              "occlusion_prob": 0.25,
+              "num_particles": 96,
+              "transition_model": "persistence",
+              "output_dir": "runs/accad_sample",
+              "seed": 11,
+              "max_sequences": 1,
+              "min_frames": 2,
+              "train_fraction": 1.0,
+              "val_fraction": 0.0,
+              "rollout_horizon": 10,
+              "robustness_noise_deg": [10.0],
+              "robustness_occlusion_prob": [0.25],
+              "process_noise_deg": 3.0,
+              "proposal_gain": 0.2,
+          }
+          Path("runs/accad_sample_config.json").write_text(
+              json.dumps(config, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps({"trimmed_frames": n_frames, "config": config}, indent=2))
+          PY
+
+      - name: Run ACCAD sample smoke experiment
+        run: |
+          python scripts/run_experiment.py --config runs/accad_sample_config.json
+
+      - name: Validate ACCAD smoke outputs
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary_path = Path("runs/accad_sample/summary.json")
+          report_path = Path("runs/accad_sample_download_report.json")
+
+          assert summary_path.exists(), "missing ACCAD smoke summary"
+          assert report_path.exists(), "missing download report"
+
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          means = summary["filter_metrics_mean"]
+
+          assert summary["num_joints"] == 23
+          assert summary["num_sequences"] == 1
+          assert report["metadata"]["poses_shape"][1] >= 72
+          assert means["filter_error_deg"] >= 0.0
+          assert means["observed_error_deg"] >= 0.0
+
+          print("ACCAD smoke summary:", means)
+          PY
+
+      - name: Upload ACCAD smoke artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: accad-amass-smoke-results
+          path: |
+            runs/accad_sample_download_report.json
+            runs/accad_sample_config.json
+            runs/accad_sample/summary.json
+            runs/accad_sample/*.csv
+            runs/accad_sample/plots/*.svg
