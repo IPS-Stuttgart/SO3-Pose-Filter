@@ -11,6 +11,10 @@ htmlcov/
 .venv/
 venv/
 env/
+alpine-wheels/
+*.egg-info/
+build/
+dist/
 
 data/
 runs/
