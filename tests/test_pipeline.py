@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 from _path import SRC  # noqa: F401
-
 from pose_filter.data import load_dataset, split_sequences
 from pose_filter.measurements import make_synthetic_measurements
 from pose_filter.particle_filter import run_particle_filter
