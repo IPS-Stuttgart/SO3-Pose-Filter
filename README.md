@@ -13,9 +13,8 @@ runtime.
 Generate a tiny synthetic AMASS-like dataset and run a smoke experiment:
 
 ```powershell
-$py='C:\Users\emper\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
-& $py scripts\make_toy_amass.py --output data\tiny_amass --sequences 6 --frames 80
-& $py scripts\run_experiment.py --config configs\example.json
+python scripts\make_toy_amass.py --output data\tiny_amass --sequences 6 --frames 80
+python scripts\run_experiment.py --config configs\example.json
 ```
 
 Outputs are written to `runs/example/`:
@@ -31,8 +30,20 @@ Outputs are written to `runs/example/`:
 Run tests:
 
 ```powershell
-& $py -m unittest discover -s tests
+python -m unittest discover -s tests
 ```
+
+Compare all transition models from one config:
+
+```powershell
+python scripts\run_model_sweep.py --config configs\example.json --output runs\sweep
+```
+
+The sweep writes:
+
+- `runs/sweep/comparison_metrics.csv`
+- `runs/sweep/comparison_summary.json`
+- one full experiment folder per transition model
 
 ## Real AMASS Data
 
@@ -43,6 +54,9 @@ Point `data_root` in a config JSON file at an AMASS/SMPL-style directory contain
 
 The prototype uses the 23 local body joints in `poses[:, 3:72]`, excluding global root orientation,
 global translation, hands, and face.
+
+Copy `configs/amass_small.example.json` to a local config and replace `data_root` with the real AMASS
+directory. Keep generated real-data outputs under `runs/`; they are ignored by git.
 
 ## Config Fields
 

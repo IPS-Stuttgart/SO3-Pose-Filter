@@ -33,7 +33,9 @@ def _normalize_log_weights(log_weights: np.ndarray) -> tuple[np.ndarray, np.ndar
     return weights, np.log(weights + 1e-300)
 
 
-def _normalize_log_weights_axis0(log_weights: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _normalize_log_weights_axis0(
+    log_weights: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
     shifted = log_weights - np.max(log_weights, axis=0, keepdims=True)
     weights = np.exp(shifted)
     weights = weights / np.sum(weights, axis=0, keepdims=True)
@@ -138,9 +140,13 @@ def run_particle_filter(
         if should_resample and t < t_steps - 1:
             idx = systematic_resample(weights, rng)
             particles = particles[idx]
-            log_weights = np.full(num_particles, -np.log(num_particles), dtype=np.float64)
+            log_weights = np.full(
+                num_particles, -np.log(num_particles), dtype=np.float64
+            )
             log_joint_weights = np.full(
-                (num_particles, observations.shape[1]), -np.log(num_particles), dtype=np.float64
+                (num_particles, observations.shape[1]),
+                -np.log(num_particles),
+                dtype=np.float64,
             )
 
     return ParticleFilterResult(

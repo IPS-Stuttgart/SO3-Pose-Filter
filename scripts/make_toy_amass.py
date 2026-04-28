@@ -16,14 +16,17 @@ def make_sequence(rng: np.random.Generator, frames: int, dims: int = 156) -> np.
         freq = rng.integers(1, 4, size=3)
         trend = rng.normal(0.0, 0.02, size=3)
         poses[:, start : start + 3] = (
-            amp[None, :] * np.sin(2.0 * np.pi * t[:, None] * freq[None, :] + phase[None, :])
+            amp[None, :]
+            * np.sin(2.0 * np.pi * t[:, None] * freq[None, :] + phase[None, :])
             + trend[None, :] * t[:, None]
         )
     return poses
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create tiny AMASS-like .npz files for smoke tests.")
+    parser = argparse.ArgumentParser(
+        description="Create tiny AMASS-like .npz files for smoke tests."
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--sequences", type=int, default=6)
     parser.add_argument("--frames", type=int, default=80)
@@ -36,7 +39,11 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     for idx in range(args.sequences):
         poses = make_sequence(rng, args.frames + idx * 3)
-        np.savez(out / f"toy_{idx:03d}.npz", poses=poses, mocap_framerate=np.asarray(args.fps))
+        np.savez(
+            out / f"toy_{idx:03d}.npz",
+            poses=poses,
+            mocap_framerate=np.asarray(args.fps),
+        )
     print(f"wrote {args.sequences} toy sequences to {out}")
 
 

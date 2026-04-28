@@ -20,7 +20,6 @@ from .evaluation import (
 from .plotting import robustness_plot, trajectory_plot
 from .transitions import build_transition_model
 
-
 REQUIRED_CONFIG_FIELDS = {
     "data_root",
     "dataset_subset",
@@ -122,19 +121,33 @@ def run_experiment(config: dict) -> dict:
                 config, "ablation_particle_counts", default_ablation_particle_counts
             )
         ],
-        proposal_gains=[float(x) for x in _list_config(config, "ablation_proposal_gains", [0.0, proposal_gain])],
+        proposal_gains=[
+            float(x)
+            for x in _list_config(
+                config, "ablation_proposal_gains", [0.0, proposal_gain]
+            )
+        ],
         factorized_updates=[
-            bool(x) for x in _list_config(config, "ablation_factorized_updates", [False, True])
+            bool(x)
+            for x in _list_config(
+                config, "ablation_factorized_updates", [False, True]
+            )
         ],
         resample_thresholds=[
-            float(x) for x in _list_config(config, "ablation_resample_thresholds", [resample_threshold])
+            float(x)
+            for x in _list_config(
+                config, "ablation_resample_thresholds", [resample_threshold]
+            )
         ],
     )
     robust_rows = robustness_rows(
         test,
         model,
         [float(x) for x in config.get("robustness_noise_deg", [config["noise_deg"]])],
-        [float(x) for x in config.get("robustness_occlusion_prob", [config["occlusion_prob"]])],
+        [
+            float(x)
+            for x in config.get("robustness_occlusion_prob", [config["occlusion_prob"]])
+        ],
         num_particles,
         seed,
         proposal_gain=proposal_gain,
@@ -176,9 +189,15 @@ def run_experiment(config: dict) -> dict:
         "resample_threshold": resample_threshold,
         "transition_metrics": transition_rows,
         "filter_metrics_mean": {
-            "observed_error_deg": float(np.nanmean([r["observed_error_deg"] for r in filter_rows])),
-            "filter_error_deg": float(np.nanmean([r["filter_error_deg"] for r in filter_rows])),
-            "persistence_error_deg": float(np.nanmean([r["persistence_error_deg"] for r in filter_rows])),
+            "observed_error_deg": float(
+                np.nanmean([r["observed_error_deg"] for r in filter_rows])
+            ),
+            "filter_error_deg": float(
+                np.nanmean([r["filter_error_deg"] for r in filter_rows])
+            ),
+            "persistence_error_deg": float(
+                np.nanmean([r["persistence_error_deg"] for r in filter_rows])
+            ),
             "mean_ess": float(np.nanmean([r["mean_ess"] for r in filter_rows])),
         },
         "ablation_metrics": ablations,
