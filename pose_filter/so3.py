@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 
-
 EPS = 1e-8
 
 
@@ -76,7 +75,7 @@ def log_map(r: np.ndarray) -> np.ndarray:
 
     out = np.zeros(r.shape[:-2] + (3,), dtype=np.float64)
     small = theta < 1e-6
-    out[small] = vee[small]
+    out[small] = 0.5 * vee[small]
 
     regular = (theta >= 1e-6) & (np.pi - theta > 1e-5)
     scale = theta[regular] / (2.0 * np.sin(theta[regular]))
@@ -124,7 +123,9 @@ def matrix_to_axis_angle(rotations: np.ndarray) -> np.ndarray:
 
 def geodesic_distance(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Return SO(3) geodesic distances between rotations, in radians."""
-    rel = np.asarray(a, dtype=np.float64) @ np.swapaxes(np.asarray(b, dtype=np.float64), -1, -2)
+    rel = np.asarray(a, dtype=np.float64) @ np.swapaxes(
+        np.asarray(b, dtype=np.float64), -1, -2
+    )
     trace = np.trace(rel, axis1=-2, axis2=-1)
     cos_theta = np.clip((trace - 1.0) * 0.5, -1.0, 1.0)
     return np.arccos(cos_theta)
@@ -143,11 +144,15 @@ def left_delta(current: np.ndarray, next_rotation: np.ndarray) -> np.ndarray:
     return log_map(rel)
 
 
-def chordal_mean(rotations: np.ndarray, weights: np.ndarray | None = None) -> np.ndarray:
+def chordal_mean(
+    rotations: np.ndarray, weights: np.ndarray | None = None
+) -> np.ndarray:
     """Compute per-joint weighted chordal means for rotations shaped (N, J, 3, 3)."""
     rotations = np.asarray(rotations, dtype=np.float64)
     if rotations.ndim != 4:
-        raise ValueError(f"expected rotations shaped (N, J, 3, 3), got {rotations.shape}")
+        raise ValueError(
+            f"expected rotations shaped (N, J, 3, 3), got {rotations.shape}"
+        )
     n = rotations.shape[0]
     if weights is None:
         weights = np.full(n, 1.0 / n, dtype=np.float64)
@@ -157,7 +162,9 @@ def chordal_mean(rotations: np.ndarray, weights: np.ndarray | None = None) -> np
     return project_to_so3(mats)
 
 
-def mean_joint_distance_deg(a: np.ndarray, b: np.ndarray, mask: np.ndarray | None = None) -> float:
+def mean_joint_distance_deg(
+    a: np.ndarray, b: np.ndarray, mask: np.ndarray | None = None
+) -> float:
     """Mean per-joint geodesic distance in degrees."""
     dist = geodesic_distance(a, b)
     if mask is not None:

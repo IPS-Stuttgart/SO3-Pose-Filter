@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def _scale(value: float, src_min: float, src_max: float, dst_min: float, dst_max: float) -> float:
+def _scale(
+    value: float, src_min: float, src_max: float, dst_min: float, dst_max: float
+) -> float:
     if src_max <= src_min:
         return (dst_min + dst_max) * 0.5
     return dst_min + (value - src_min) * (dst_max - dst_min) / (src_max - src_min)
@@ -25,7 +27,9 @@ def line_plot_svg(
     path.parent.mkdir(parents=True, exist_ok=True)
     all_points = [pt for points in series.values() for pt in points if pt[1] == pt[1]]
     if not all_points:
-        path.write_text("<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8")
+        path.write_text(
+            "<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8"
+        )
         return
     xs = [p[0] for p in all_points]
     ys = [p[1] for p in all_points]
@@ -46,8 +50,12 @@ def line_plot_svg(
         frac = tick / 4.0
         y = _scale(frac, 0, 1, height - pad_b, pad_t)
         val = y_min + frac * (y_max - y_min)
-        parts.append(f"<line x1='{pad_l-4}' y1='{y:.1f}' x2='{width-pad_r}' y2='{y:.1f}' stroke='#ddd'/>")
-        parts.append(f"<text x='{pad_l-8}' y='{y+4:.1f}' text-anchor='end' font-family='Arial' font-size='11'>{val:.1f}</text>")
+        parts.append(
+            f"<line x1='{pad_l-4}' y1='{y:.1f}' x2='{width-pad_r}' y2='{y:.1f}' stroke='#ddd'/>"
+        )
+        parts.append(
+            f"<text x='{pad_l-8}' y='{y+4:.1f}' text-anchor='end' font-family='Arial' font-size='11'>{val:.1f}</text>"
+        )
     for idx, (name, points) in enumerate(series.items()):
         color = colors[idx % len(colors)]
         coords = []
@@ -58,11 +66,17 @@ def line_plot_svg(
             sy = _scale(y, y_min, y_max, height - pad_b, pad_t)
             coords.append(f"{sx:.1f},{sy:.1f}")
         if coords:
-            parts.append(f"<polyline fill='none' stroke='{color}' stroke-width='2.2' points='{' '.join(coords)}'/>")
+            parts.append(
+                f"<polyline fill='none' stroke='{color}' stroke-width='2.2' points='{' '.join(coords)}'/>"
+            )
             lx = width - 180
             ly = pad_t + 20 + idx * 20
-            parts.append(f"<line x1='{lx}' y1='{ly}' x2='{lx+24}' y2='{ly}' stroke='{color}' stroke-width='2.2'/>")
-            parts.append(f"<text x='{lx+30}' y='{ly+4}' font-family='Arial' font-size='12'>{name}</text>")
+            parts.append(
+                f"<line x1='{lx}' y1='{ly}' x2='{lx+24}' y2='{ly}' stroke='{color}' stroke-width='2.2'/>"
+            )
+            parts.append(
+                f"<text x='{lx+30}' y='{ly+4}' font-family='Arial' font-size='12'>{name}</text>"
+            )
     parts.append("</svg>")
     path.write_text("\n".join(parts), encoding="utf-8")
 

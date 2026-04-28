@@ -30,7 +30,9 @@ def make_synthetic_measurements(
     mask = rng.random(truth.shape[:-2]) >= float(occlusion_prob)
     if mask.shape[0] > 0:
         mask[0] = True
-    return SyntheticMeasurements(observations=observations, mask=mask, noise_sigma_rad=sigma)
+    return SyntheticMeasurements(
+        observations=observations, mask=mask, noise_sigma_rad=sigma
+    )
 
 
 def log_likelihood(
@@ -50,7 +52,9 @@ def log_likelihood(
     return -0.5 * np.sum(np.where(active, (dist / sigma) ** 2, 0.0), axis=-1)
 
 
-def observed_error_deg(truth: np.ndarray, observations: np.ndarray, mask: np.ndarray) -> float:
+def observed_error_deg(
+    truth: np.ndarray, observations: np.ndarray, mask: np.ndarray
+) -> float:
     """Mean observed-joint measurement error in degrees."""
     dist = geodesic_distance(truth, observations)
     active = np.asarray(mask, dtype=bool)
