@@ -5,14 +5,15 @@ It reads SMPL-style AMASS `.npz` files, converts local body joint axis-angle pos
 matrices, creates synthetic noisy/occluded measurements, and evaluates transition baselines plus a particle
 filter.
 
-The code intentionally uses only NumPy and the Python standard library so it can run in the bundled Codex
-runtime.
+The code intentionally uses only NumPy and the Python standard library. The package source follows a
+PyRecEst-style `src/pose_filter` layout.
 
 ## Quick Start
 
 Generate a tiny synthetic AMASS-like dataset and run a smoke experiment:
 
 ```powershell
+python -m pip install -e .
 python scripts\make_toy_amass.py --output data\tiny_amass --sequences 6 --frames 80
 python scripts\run_experiment.py --config configs\example.json
 ```
