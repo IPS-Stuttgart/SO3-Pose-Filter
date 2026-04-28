@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from _path import SRC  # noqa: F401
 
 from pose_filter.data import load_dataset, split_sequences
 from pose_filter.evaluation import evaluate_filter_sequence_artifacts, temporal_metrics
