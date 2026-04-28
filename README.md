@@ -1,13 +1,14 @@
 # SO(3)^K Motion Filtering Prototype
 
-This workspace contains a small, dependency-light prototype for early AMASS/SMPL motion-filtering results.
+This workspace contains a small prototype for early AMASS/SMPL motion-filtering results.
 It reads SMPL-style AMASS `.npz` files, converts local body joint axis-angle poses into SO(3) rotation
 matrices, creates synthetic noisy/occluded measurements, and evaluates transition baselines plus a particle
 filter. It also reports cheap smoothing baselines so the particle filter is compared against simple temporal
 methods rather than only raw measurements.
 
-The package source follows a PyRecEst-style `src/pose_filter` layout and reuses PyRecEst smoothing
-utilities for SO(3) temporal baselines.
+The core SO(3) numerics use NumPy, and quaternion product-state distributions use PyRecEst as their
+backend. The smoothing baselines also reuse PyRecEst utilities. The package source follows a
+`src/pose_filter` layout.
 
 ## Quick Start
 
@@ -59,6 +60,26 @@ global translation, hands, and face.
 
 Copy `configs/amass_small.example.json` to a local config and replace `data_root` with the real AMASS
 directory. Keep generated real-data outputs under `runs/`; they are ignored by git.
+
+## Quaternion PyRecEst Backend
+
+The filter internals use rotation matrices, while `pose_filter.quaternion` uses PyRecEst
+`HyperhemisphereCartProdDiracDistribution` objects as the backend for scalar-last unit quaternion
+states `(x, y, z, w)` on the upper hyperhemisphere `S^3_+`:
+
+```python
+from pose_filter.quaternion import rotations_to_pyrecest_hyperhemisphere_dirac
+from pose_filter.quaternion import rotations_to_quaternions
+
+quaternions = rotations_to_quaternions(rotations)  # [N, 23, 4], w >= 0
+distribution = rotations_to_pyrecest_hyperhemisphere_dirac(
+    rotations,
+    weights=particle_weights,
+)
+```
+
+PyRecEst is a runtime dependency because these quaternion product-state distributions are part of the
+package backend rather than an optional adapter.
 
 ## Config Fields
 
