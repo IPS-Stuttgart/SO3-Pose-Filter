@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,7 +9,7 @@ description = "Prototype for recursive Bayesian filtering of human pose trajecto
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Florian Pfaff" }]
-dependencies = ["numpy", "pyrecest"]
+dependencies = ["numpy>=1.24", "pyrecest"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -18,11 +18,11 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.black]
-line-length = 88
+line-length = 180
 target-version = ["py311"]
 
 [tool.ruff]
-line-length = 88
+line-length = 180
 target-version = "py311"
 
 [tool.mypy]

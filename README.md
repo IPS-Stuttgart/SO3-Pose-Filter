@@ -23,6 +23,7 @@ Outputs are written to `runs/example/`:
 - `summary.json`
 - `transition_metrics.csv`
 - `filter_metrics.csv`
+- `ablation_metrics.csv`
 - `robustness_metrics.csv`
 - `plots/*.svg`
 - `trajectory_preview.csv`
@@ -104,6 +105,12 @@ Useful optional fields:
 - `robustness_occlusion_prob`
 - `process_noise_deg`
 - `proposal_gain`
+- `factorized_update`
+- `resample_threshold`
+- `ablation_particle_counts`
+- `ablation_proposal_gains`
+- `ablation_factorized_updates`
+- `ablation_resample_thresholds`
 
 ## Notes
 
@@ -111,3 +118,8 @@ Useful optional fields:
 from the current pose and estimates residual noise for sampling. This keeps the first prototype runnable
 without PyTorch while preserving the `sample_next` / `log_prob_next` interface expected by later neural
 models.
+
+`ablation_metrics.csv` varies one filter setting at a time around the configured baseline. It reports
+particle-count, proposal-gain, factorized-update, and resampling-threshold rows so experiments can compare
+the guided/factorized particle filter against simpler bootstrap settings such as `proposal_gain=0` or
+`factorized_update=false`.

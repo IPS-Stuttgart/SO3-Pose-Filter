@@ -29,9 +29,7 @@ class QuaternionBridgeTests(unittest.TestCase):
 
         self.assertEqual(quaternions.shape, (8, 23, 4))
         self.assertTrue(bool(np.all(quaternions[..., 3] >= 0.0)))
-        self.assertLess(
-            float(np.max(np.abs(np.linalg.norm(quaternions, axis=-1) - 1.0))), 1e-10
-        )
+        self.assertLess(float(np.max(np.abs(np.linalg.norm(quaternions, axis=-1) - 1.0))), 1e-10)
         self.assertLess(float(np.max(geodesic_distance(rotations, recovered))), 1e-7)
 
     def test_antipodal_quaternions_are_canonicalized(self) -> None:
@@ -43,11 +41,7 @@ class QuaternionBridgeTests(unittest.TestCase):
 
         self.assertTrue(bool(np.allclose(canonical, antipodal)))
         self.assertLess(
-            float(
-                np.max(
-                    geodesic_distance(rotation, quaternions_to_rotations(-quaternion))
-                )
-            ),
+            float(np.max(geodesic_distance(rotation, quaternions_to_rotations(-quaternion)))),
             1e-10,
         )
 
@@ -57,16 +51,10 @@ class QuaternionBridgeTests(unittest.TestCase):
         weights = np.arange(1, 6, dtype=np.float64)
         weights = weights / np.sum(weights)
 
-        distribution = rotations_to_pyrecest_hyperhemisphere_dirac(
-            rotations, weights=weights
-        )
+        distribution = rotations_to_pyrecest_hyperhemisphere_dirac(rotations, weights=weights)
         self.assertIsInstance(distribution, HyperhemisphereCartProdDiracDistribution)
-        quaternions, recovered_weights = pyrecest_hyperhemisphere_dirac_to_quaternions(
-            distribution
-        )
-        recovered_rotations, recovered_rotation_weights = (
-            pyrecest_hyperhemisphere_dirac_to_rotations(distribution)
-        )
+        quaternions, recovered_weights = pyrecest_hyperhemisphere_dirac_to_quaternions(distribution)
+        recovered_rotations, recovered_rotation_weights = pyrecest_hyperhemisphere_dirac_to_rotations(distribution)
 
         self.assertEqual(distribution.d.shape, (5, 92))
         self.assertEqual(distribution.dim_hemisphere, 3)
@@ -75,9 +63,7 @@ class QuaternionBridgeTests(unittest.TestCase):
         self.assertTrue(bool(np.all(quaternions[..., 3] >= 0.0)))
         self.assertTrue(bool(np.allclose(recovered_weights, weights)))
         self.assertTrue(bool(np.allclose(recovered_rotation_weights, weights)))
-        self.assertLess(
-            float(np.max(geodesic_distance(rotations, recovered_rotations))), 1e-7
-        )
+        self.assertLess(float(np.max(geodesic_distance(rotations, recovered_rotations))), 1e-7)
 
 
 if __name__ == "__main__":

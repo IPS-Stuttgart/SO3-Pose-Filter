@@ -58,25 +58,19 @@ def rotations_to_quaternions(rotations: np.ndarray) -> np.ndarray:
             out_idx = idxs[selected]
             m = mats[selected]
             if axis == 0:
-                scale = 2.0 * np.sqrt(
-                    np.maximum(1.0 + m[:, 0, 0] - m[:, 1, 1] - m[:, 2, 2], EPS)
-                )
+                scale = 2.0 * np.sqrt(np.maximum(1.0 + m[:, 0, 0] - m[:, 1, 1] - m[:, 2, 2], EPS))
                 q[out_idx, 3] = (m[:, 2, 1] - m[:, 1, 2]) / scale
                 q[out_idx, 0] = 0.25 * scale
                 q[out_idx, 1] = (m[:, 0, 1] + m[:, 1, 0]) / scale
                 q[out_idx, 2] = (m[:, 0, 2] + m[:, 2, 0]) / scale
             elif axis == 1:
-                scale = 2.0 * np.sqrt(
-                    np.maximum(1.0 + m[:, 1, 1] - m[:, 0, 0] - m[:, 2, 2], EPS)
-                )
+                scale = 2.0 * np.sqrt(np.maximum(1.0 + m[:, 1, 1] - m[:, 0, 0] - m[:, 2, 2], EPS))
                 q[out_idx, 3] = (m[:, 0, 2] - m[:, 2, 0]) / scale
                 q[out_idx, 0] = (m[:, 0, 1] + m[:, 1, 0]) / scale
                 q[out_idx, 1] = 0.25 * scale
                 q[out_idx, 2] = (m[:, 1, 2] + m[:, 2, 1]) / scale
             else:
-                scale = 2.0 * np.sqrt(
-                    np.maximum(1.0 + m[:, 2, 2] - m[:, 0, 0] - m[:, 1, 1], EPS)
-                )
+                scale = 2.0 * np.sqrt(np.maximum(1.0 + m[:, 2, 2] - m[:, 0, 0] - m[:, 1, 1], EPS))
                 q[out_idx, 3] = (m[:, 1, 0] - m[:, 0, 1]) / scale
                 q[out_idx, 0] = (m[:, 0, 2] + m[:, 2, 0]) / scale
                 q[out_idx, 1] = (m[:, 1, 2] + m[:, 2, 1]) / scale
@@ -106,9 +100,7 @@ def quaternions_to_rotations(quaternions: np.ndarray) -> np.ndarray:
     return project_to_so3(rotations)
 
 
-def quaternions_to_pyrecest_hyperhemisphere_dirac(
-    quaternions: np.ndarray, weights: np.ndarray | None = None
-) -> HyperhemisphereCartProdDiracDistribution:
+def quaternions_to_pyrecest_hyperhemisphere_dirac(quaternions: np.ndarray, weights: np.ndarray | None = None) -> HyperhemisphereCartProdDiracDistribution:
     """Create the PyRecEst backend distribution for quaternion pose states.
 
     Input quaternions are scalar-last and shaped `(N, J, 4)`. A single state
@@ -118,9 +110,7 @@ def quaternions_to_pyrecest_hyperhemisphere_dirac(
     if q.ndim == 2:
         q = q[None, ...]
     if q.ndim != 3:
-        raise ValueError(
-            f"expected quaternions shaped (N, J, 4) or (J, 4), got {q.shape}"
-        )
+        raise ValueError(f"expected quaternions shaped (N, J, 4) or (J, 4), got {q.shape}")
 
     n_particles, n_joints, _ = q.shape
     if weights is None:
@@ -142,9 +132,7 @@ def quaternions_to_pyrecest_hyperhemisphere_dirac(
     )
 
 
-def rotations_to_pyrecest_hyperhemisphere_dirac(
-    rotations: np.ndarray, weights: np.ndarray | None = None
-) -> HyperhemisphereCartProdDiracDistribution:
+def rotations_to_pyrecest_hyperhemisphere_dirac(rotations: np.ndarray, weights: np.ndarray | None = None) -> HyperhemisphereCartProdDiracDistribution:
     """Create the PyRecEst backend distribution from SO(3)^K rotations."""
     return quaternions_to_pyrecest_hyperhemisphere_dirac(
         rotations_to_quaternions(rotations),
@@ -163,9 +151,7 @@ def pyrecest_hyperhemisphere_dirac_to_quaternions(
     n_joints = int(getattr(distribution, "n_hemispheres"))
     d = np.asarray(distribution.d, dtype=np.float64)
     if d.ndim != 2 or d.shape[1] != n_joints * 4:
-        raise ValueError(
-            f"expected flattened quaternions shaped (N, {n_joints * 4}), got {d.shape}"
-        )
+        raise ValueError(f"expected flattened quaternions shaped (N, {n_joints * 4}), got {d.shape}")
     weights = np.asarray(distribution.w, dtype=np.float64)
     return canonicalize_quaternions(d.reshape(d.shape[0], n_joints, 4)), weights.copy()
 
