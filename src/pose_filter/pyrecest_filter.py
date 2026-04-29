@@ -91,11 +91,15 @@ def run_pyrecest_particle_filter(
     estimates = []
     ess_values = []
     resampled_flags = []
+    particle_history: list[np.ndarray] = []
+    history_keep = int(getattr(transition_model, "history_length", 0)) + 1
 
     for t in range(t_steps):
         if t > 0:
             particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
-            predicted = transition_model.sample_next(particles, rng)
+            predicted = transition_model.sample_next_from_history(
+                particle_history or [particles], rng
+            )
             filter_state.set_particles(rotations_to_quaternions(predicted))
 
         if proposal_gain > 0.0:
@@ -147,6 +151,7 @@ def run_pyrecest_particle_filter(
         if should_resample and t < t_steps - 1:
             idx = systematic_resample(weights, rng)
             particles = _as_numpy(filter_state.particles)[idx]
+            particle_history = [entry[idx] for entry in particle_history]
             filter_state.set_particles(
                 particles,
                 weights=np.full(num_particles, 1.0 / num_particles, dtype=np.float64),
@@ -157,6 +162,12 @@ def run_pyrecest_particle_filter(
             log_joint_weights = np.full(
                 (num_particles, num_joints), -np.log(num_particles), dtype=np.float64
             )
+
+        if t < t_steps - 1:
+            particle_history.append(
+                quaternions_to_rotations(_as_numpy(filter_state.particles))
+            )
+            particle_history = particle_history[-history_keep:]
 
     return ParticleFilterResult(
         estimates=np.asarray(estimates),

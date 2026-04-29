@@ -59,8 +59,8 @@ python scripts\run_model_sweep.py --config configs\example.json --output runs\sw
 ```
 
 Run the first-results benchmark wrapper, which reports raw observations, deterministic persistence,
-Gaussian random-walk particle filters, and the nonlinear MLP transition particle filters on one
-noise/occlusion grid:
+Gaussian random-walk particle filters, and the nonlinear current-pose/history MLP transition particle
+filters on one noise/occlusion grid:
 
 ```powershell
 python scripts\run_first_results_benchmark.py `
@@ -121,7 +121,7 @@ python scripts\prepare_amass_windows.py `
 python scripts\run_model_sweep.py `
   --config configs\accad_dynamic.example.json `
   --output runs\accad_dynamic_sweep `
-  --models persistence gaussian_rw learned_delta mlp_delta
+  --models persistence gaussian_rw learned_delta mlp_delta history_mlp_delta
 
 python scripts\run_first_results_benchmark.py `
   --config configs\accad_dynamic_benchmark.example.json `
@@ -131,6 +131,13 @@ python scripts\run_first_results_benchmark.py `
   --config configs\accad_dynamic_benchmark.example.json `
   --output runs\accad_dynamic_mlp_single_point `
   --methods raw persistence gaussian_rw pyrecest_pf mlp_delta `
+  --noise-deg 10 `
+  --occlusion-prob 0.25
+
+python scripts\run_first_results_benchmark.py `
+  --config configs\accad_dynamic_benchmark.example.json `
+  --output runs\accad_dynamic_history_mlp_single_point `
+  --methods raw persistence gaussian_rw pyrecest_pf mlp_delta history_mlp_delta `
   --noise-deg 10 `
   --occlusion-prob 0.25
 ```
@@ -170,7 +177,7 @@ Required fields:
 - `noise_deg`
 - `occlusion_prob`
 - `num_particles`
-- `transition_model`: `persistence`, `gaussian_rw`, `learned_delta`, or `mlp_delta`
+- `transition_model`: `persistence`, `gaussian_rw`, `learned_delta`, `mlp_delta`, or `history_mlp_delta`
 
 Useful optional fields:
 
@@ -202,8 +209,16 @@ Useful optional fields:
 - `mlp_weight_decay`
 - `mlp_batch_size`
 - `transition_checkpoint`
+- `mlp_transition_checkpoint`
+- `history_transition_checkpoint`
 - `transition_load_checkpoint`
 - `transition_save_checkpoint`
+- `history_length`
+- `history_mlp_hidden_dim`
+- `history_mlp_epochs`
+- `history_mlp_learning_rate`
+- `history_mlp_weight_decay`
+- `history_mlp_batch_size`
 
 ## Notes
 
@@ -217,6 +232,11 @@ a compact one-hidden-layer tanh network to predict the next tangent-space delta,
 per-joint variance, and supports `.npz` checkpoint save/load through `transition_checkpoint`. This keeps the
 learned baseline CI-friendly while providing a stronger target than the linear ridge model before adding a
 full PyTorch GRU.
+
+`history_mlp_delta` extends the MLP baseline with recent tangent-space velocities. It trains on the current
+pose plus `history_length` previous SO(3) deltas and the NumPy/PyRecEst particle filters preserve aligned
+per-particle histories during prediction and resampling. This is the first velocity-aware transition model
+while keeping the same public transition interface.
 
 Synthetic confidence values default to the original binary mask behavior when `confidence_noise_std` is
 zero. Setting `confidence_noise_std > 0` samples observed-joint confidences in `[min_confidence, 1]`; these

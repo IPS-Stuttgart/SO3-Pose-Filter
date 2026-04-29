@@ -15,7 +15,8 @@
     "gaussian_rw",
     "pyrecest_pf",
     "mlp_delta",
-    "pyrecest_mlp_pf"
+    "pyrecest_mlp_pf",
+    "history_mlp_delta"
   ],
   "benchmark_noise_deg": [5.0, 12.0],
   "benchmark_occlusion_prob": [0.0, 0.5],
@@ -34,6 +35,12 @@
   "mlp_learning_rate": 0.003,
   "mlp_weight_decay": 0.0001,
   "mlp_batch_size": 128,
+  "history_length": 2,
+  "history_mlp_hidden_dim": 32,
+  "history_mlp_epochs": 25,
+  "history_mlp_learning_rate": 0.003,
+  "history_mlp_weight_decay": 0.0001,
+  "history_mlp_batch_size": 128,
   "proposal_gain": 0.25,
   "confidence_noise_std": 0.15,
   "min_confidence": 0.35,

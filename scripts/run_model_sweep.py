@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from pose_filter.experiment import load_config, run_experiment  # noqa: E402
 
 DEFAULT_MODELS = ("persistence", "gaussian_rw", "learned_delta")
-ALL_MODELS = (*DEFAULT_MODELS, "mlp_delta")
+ALL_MODELS = (*DEFAULT_MODELS, "mlp_delta", "history_mlp_delta")
 
 
 def _metric(summary: dict, name: str) -> float:
