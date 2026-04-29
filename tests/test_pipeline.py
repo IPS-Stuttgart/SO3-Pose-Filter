@@ -22,6 +22,7 @@ from pose_filter.transitions import (
     LearnedDeltaTransition,
     PersistenceTransition,
 )
+from run_first_results_benchmark import run_first_results_benchmark
 from prepare_amass_windows import prepare_windows
 
 
@@ -74,6 +75,50 @@ class PipelineTests(unittest.TestCase):
             seqs = load_dataset(root / "segments", "", frame_rate=20, num_joints=23)
             self.assertEqual(len(seqs), 2)
             self.assertEqual(seqs[0].rotations.shape[1:], (23, 3, 3))
+
+    def test_first_results_benchmark_writes_summary_and_plots(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx in range(4):
+                _write_toy(root / f"seq_{idx}.npz", frames=60 + idx * 3)
+
+            output_dir = root / "benchmark"
+            summary = run_first_results_benchmark(
+                {
+                    "data_root": str(root),
+                    "dataset_subset": "",
+                    "frame_rate": 20,
+                    "num_joints": 23,
+                    "noise_deg": 5.0,
+                    "occlusion_prob": 0.5,
+                    "num_particles": 12,
+                    "transition_model": "gaussian_rw",
+                    "seed": 13,
+                    "max_sequences": 4,
+                    "min_frames": 10,
+                    "process_noise_deg": 3.0,
+                    "proposal_gain": 0.2,
+                    "factorized_update": True,
+                    "resample_threshold": 0.5,
+                },
+                output_dir,
+                methods=("raw", "persistence", "gaussian_rw"),
+                noise_grid=[5.0],
+                occlusion_grid=[0.0, 0.5],
+            )
+
+            self.assertEqual(summary["row_count"], 6)
+            self.assertEqual(
+                set(summary["means_by_method"]), {"raw", "persistence", "gaussian_rw"}
+            )
+            self.assertTrue((output_dir / "benchmark_metrics.csv").exists())
+            self.assertTrue((output_dir / "first_results_summary.json").exists())
+            self.assertTrue(
+                (output_dir / "plots" / "tracking_error_heatmap.svg").exists()
+            )
+            self.assertTrue(
+                (output_dir / "plots" / "filter_vs_baselines.svg").exists()
+            )
 
     def test_transition_models_and_filter_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as td:
