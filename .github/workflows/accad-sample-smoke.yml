@@ -243,6 +243,7 @@ jobs:
               "occlusion_prob": 0.25,
               "num_particles": 96,
               "transition_model": "persistence",
+              "filter_backend": "numpy",
               "output_dir": "runs/accad_sample",
               "seed": 11,
               "max_sequences": 1,

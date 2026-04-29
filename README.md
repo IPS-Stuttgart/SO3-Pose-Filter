@@ -61,25 +61,24 @@ global translation, hands, and face.
 Copy `configs/amass_small.example.json` to a local config and replace `data_root` with the real AMASS
 directory. Keep generated real-data outputs under `runs/`; they are ignored by git.
 
-## Quaternion PyRecEst Backend
+## PyRecEst Backend
 
-The filter internals use rotation matrices, while `pose_filter.quaternion` uses PyRecEst
-`HyperhemisphereCartProdDiracDistribution` objects as the backend for scalar-last unit quaternion
-states `(x, y, z, w)` on the upper hyperhemisphere `S^3_+`:
+The default experiment path uses the NumPy SO(3)^K particle filter. Set `"filter_backend": "pyrecest"`
+in an experiment config to store particles in PyRecEst's `SO3ProductParticleFilter` while keeping the
+same transition models, synthetic measurements, and output metrics. This backend uses scalar-last unit
+quaternion states `(x, y, z, w)` on the upper hyperhemisphere `S^3_+` and converts back to rotation
+matrices for evaluation:
 
 ```python
-from pose_filter.quaternion import rotations_to_pyrecest_hyperhemisphere_dirac
 from pose_filter.quaternion import rotations_to_quaternions
+from pose_filter.pyrecest_filter import run_pyrecest_particle_filter
 
 quaternions = rotations_to_quaternions(rotations)  # [N, 23, 4], w >= 0
-distribution = rotations_to_pyrecest_hyperhemisphere_dirac(
-    rotations,
-    weights=particle_weights,
-)
+result = run_pyrecest_particle_filter(observations, mask, model, noise_sigma, 128, rng)
 ```
 
-PyRecEst is a runtime dependency because these quaternion product-state distributions are part of the
-package backend rather than an optional adapter.
+PyRecEst is a runtime dependency because the quaternion product-state distributions and the optional
+PyRecEst particle filter backend are part of the package backend rather than an external script.
 
 ## Config Fields
 
@@ -106,6 +105,7 @@ Useful optional fields:
 - `robustness_noise_deg`
 - `robustness_occlusion_prob`
 - `process_noise_deg`
+- `filter_backend`: `numpy` or `pyrecest`
 - `proposal_gain`
 - `factorized_update`
 - `resample_threshold`
