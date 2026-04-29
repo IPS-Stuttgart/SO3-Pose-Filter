@@ -197,3 +197,51 @@ def run_particle_filter(
         effective_sample_size=np.asarray(ess_values),
         resampled=np.asarray(resampled_flags, dtype=bool),
     )
+
+
+def run_filter(
+    observations: np.ndarray,
+    mask: np.ndarray,
+    transition_model: TransitionModel,
+    noise_sigma_rad: float,
+    num_particles: int,
+    rng: np.random.Generator,
+    resample_threshold: float = 0.5,
+    factorized_update: bool = True,
+    proposal_gain: float = 0.2,
+    backend: str = "numpy",
+    confidence: np.ndarray | None = None,
+    joint_noise_sigma_rad: np.ndarray | None = None,
+) -> ParticleFilterResult:
+    """Run a configured particle filter backend."""
+    if backend == "numpy":
+        return run_particle_filter(
+            observations,
+            mask,
+            transition_model,
+            noise_sigma_rad,
+            num_particles,
+            rng,
+            resample_threshold=resample_threshold,
+            factorized_update=factorized_update,
+            proposal_gain=proposal_gain,
+            confidence=confidence,
+            joint_noise_sigma_rad=joint_noise_sigma_rad,
+        )
+    if backend == "pyrecest":
+        from .pyrecest_filter import run_pyrecest_particle_filter
+
+        return run_pyrecest_particle_filter(
+            observations,
+            mask,
+            transition_model,
+            noise_sigma_rad,
+            num_particles,
+            rng,
+            resample_threshold=resample_threshold,
+            factorized_update=factorized_update,
+            proposal_gain=proposal_gain,
+            confidence=confidence,
+            joint_noise_sigma_rad=joint_noise_sigma_rad,
+        )
+    raise ValueError(f"unknown filter_backend: {backend}")

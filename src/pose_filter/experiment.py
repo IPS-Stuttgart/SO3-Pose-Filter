@@ -69,6 +69,7 @@ def run_experiment(config: dict) -> dict:
     proposal_gain = float(config.get("proposal_gain", 0.2))
     factorized_update = bool(config.get("factorized_update", True))
     resample_threshold = float(config.get("resample_threshold", 0.5))
+    filter_backend = str(config.get("filter_backend", "numpy"))
     noise_deg = float(config["noise_deg"])
     occlusion_prob = float(config["occlusion_prob"])
     num_particles = int(config["num_particles"])
@@ -117,6 +118,7 @@ def run_experiment(config: dict) -> dict:
         min_confidence=min_confidence,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
+        filter_backend=filter_backend,
     )
     ablations = ablation_rows(
         test,
@@ -154,6 +156,7 @@ def run_experiment(config: dict) -> dict:
         ],
         confidence_noise_std=confidence_noise_std,
         min_confidence=min_confidence,
+        filter_backend=filter_backend,
     )
     robust_rows = robustness_rows(
         test,
@@ -170,6 +173,7 @@ def run_experiment(config: dict) -> dict:
         min_confidence=min_confidence,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
+        filter_backend=filter_backend,
     )
     preview_rows = trajectory_preview_rows(
         test[0],
@@ -183,6 +187,7 @@ def run_experiment(config: dict) -> dict:
         min_confidence=min_confidence,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
+        filter_backend=filter_backend,
     )
 
     write_csv(output_dir / "transition_metrics.csv", transition_rows)
@@ -224,6 +229,7 @@ def run_experiment(config: dict) -> dict:
         "min_confidence": min_confidence,
         "factorized_update": factorized_update,
         "resample_threshold": resample_threshold,
+        "filter_backend": filter_backend,
         "transition_metrics": transition_rows,
         "filter_metrics_mean": {
             key: _mean_metric(filter_rows, key) for key in FILTER_SUMMARY_KEYS

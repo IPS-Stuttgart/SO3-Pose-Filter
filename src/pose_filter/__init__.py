@@ -7,6 +7,7 @@ __all__ = [
     "measurements",
     "particle_filter",
     "plotting",
+    "pyrecest_filter",
     "quaternion",
     "so3",
     "transitions",
