@@ -12,7 +12,7 @@ import numpy as np
 
 from .data import PoseSequence
 from .measurements import make_synthetic_measurements, observed_error_deg
-from .particle_filter import run_particle_filter
+from .particle_filter import run_filter
 from .so3 import geodesic_distance, left_delta, mean_joint_distance_deg
 from .transitions import (
     PersistenceTransition,
@@ -211,11 +211,12 @@ def evaluate_filter_sequence_artifacts(
     proposal_gain: float = 0.2,
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
+    filter_backend: str = "numpy",
 ) -> FilterEvaluationArtifacts:
     measurements = make_synthetic_measurements(
         seq.rotations, noise_deg, occlusion_prob, rng
     )
-    result = run_particle_filter(
+    result = run_filter(
         measurements.observations,
         measurements.mask,
         transition_model,
@@ -225,6 +226,7 @@ def evaluate_filter_sequence_artifacts(
         proposal_gain=proposal_gain,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
+        backend=filter_backend,
     )
     persistence = PersistenceTransition()
     persistence_estimates_list = [seq.rotations[0]]
@@ -246,6 +248,7 @@ def evaluate_filter_sequence_artifacts(
         "proposal_gain": float(proposal_gain),
         "factorized_update": bool(factorized_update),
         "resample_threshold": float(resample_threshold),
+        "filter_backend": filter_backend,
         "observed_error_deg": observed_joint_error,
         "observed_joint_error_deg": observed_joint_error,
         "filter_error_deg": mean_joint_distance_deg(seq.rotations, result.estimates),
@@ -305,6 +308,7 @@ def evaluate_filter_sequence(
     proposal_gain: float = 0.2,
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
+    filter_backend: str = "numpy",
 ) -> dict:
     return evaluate_filter_sequence_artifacts(
         seq,
@@ -316,6 +320,7 @@ def evaluate_filter_sequence(
         proposal_gain=proposal_gain,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
+        filter_backend=filter_backend,
     ).metrics
 
 
@@ -329,6 +334,7 @@ def evaluate_filter(
     proposal_gain: float = 0.2,
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
+    filter_backend: str = "numpy",
 ) -> list[dict]:
     rows = []
     for idx, seq in enumerate(sequences):
@@ -344,6 +350,7 @@ def evaluate_filter(
                 proposal_gain=proposal_gain,
                 factorized_update=factorized_update,
                 resample_threshold=resample_threshold,
+                filter_backend=filter_backend,
             )
         )
     return rows
@@ -359,6 +366,7 @@ def evaluate_filter_with_artifacts(
     proposal_gain: float = 0.2,
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
+    filter_backend: str = "numpy",
 ) -> tuple[list[dict], list[dict], list[dict]]:
     metrics = []
     per_joint_rows = []
@@ -375,6 +383,7 @@ def evaluate_filter_with_artifacts(
             proposal_gain=proposal_gain,
             factorized_update=factorized_update,
             resample_threshold=resample_threshold,
+            filter_backend=filter_backend,
         )
         metrics.append(artifacts.metrics)
         per_joint_rows.extend(artifacts.per_joint_rows)
@@ -420,6 +429,7 @@ def ablation_rows(
     proposal_gains: list[float],
     factorized_updates: list[bool],
     resample_thresholds: list[float],
+    filter_backend: str = "numpy",
 ) -> list[dict]:
     """Run one-axis-at-a-time filter ablations around the configured baseline."""
 
@@ -476,6 +486,7 @@ def ablation_rows(
             proposal_gain=cfg.proposal_gain,
             factorized_update=cfg.factorized_update,
             resample_threshold=cfg.resample_threshold,
+            filter_backend=filter_backend,
         )
         rows.append(
             {
@@ -485,6 +496,7 @@ def ablation_rows(
                 "proposal_gain": cfg.proposal_gain,
                 "factorized_update": cfg.factorized_update,
                 "resample_threshold": cfg.resample_threshold,
+                "filter_backend": filter_backend,
                 **_mean_row(filter_rows),
             }
         )
@@ -521,6 +533,7 @@ def robustness_rows(
     proposal_gain: float = 0.2,
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
+    filter_backend: str = "numpy",
 ) -> list[dict]:
     rows = []
     for noise in noise_grid:
@@ -535,11 +548,13 @@ def robustness_rows(
                 proposal_gain=proposal_gain,
                 factorized_update=factorized_update,
                 resample_threshold=resample_threshold,
+                filter_backend=filter_backend,
             )
             rows.append(
                 {
                     "noise_deg": float(noise),
                     "occlusion_prob": float(occ),
+                    "filter_backend": filter_backend,
                     "observed_error_deg": _nanmean(
                         [r["observed_error_deg"] for r in result_rows]
                     ),
@@ -580,12 +595,13 @@ def trajectory_preview_rows(
     proposal_gain: float = 0.2,
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
+    filter_backend: str = "numpy",
 ) -> list[dict]:
     rng = np.random.default_rng(seed)
     measurements = make_synthetic_measurements(
         seq.rotations, noise_deg, occlusion_prob, rng
     )
-    result = run_particle_filter(
+    result = run_filter(
         measurements.observations,
         measurements.mask,
         transition_model,
@@ -595,6 +611,7 @@ def trajectory_preview_rows(
         proposal_gain=proposal_gain,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
+        backend=filter_backend,
     )
     dist_obs = geodesic_distance(seq.rotations, measurements.observations)
     dist_filter = geodesic_distance(seq.rotations, result.estimates)

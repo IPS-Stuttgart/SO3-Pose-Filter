@@ -7,6 +7,7 @@
   "occlusion_prob": 0.25,
   "num_particles": 128,
   "transition_model": "gaussian_rw",
+  "filter_backend": "numpy",
   "output_dir": "runs/example",
   "seed": 7,
   "max_sequences": 6,

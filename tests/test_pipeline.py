@@ -13,7 +13,8 @@ from pose_filter.evaluation import (
     temporal_metrics,
 )
 from pose_filter.measurements import make_synthetic_measurements
-from pose_filter.particle_filter import run_particle_filter
+from pose_filter.particle_filter import run_filter, run_particle_filter
+from pose_filter.pyrecest_filter import is_pyrecest_filter_available
 from pose_filter.transitions import (
     GaussianRandomWalkTransition,
     LearnedDeltaTransition,
@@ -119,6 +120,33 @@ class PipelineTests(unittest.TestCase):
                 {row["estimate"] for row in artifacts.temporal_rows},
                 {"truth", "observed", "filter", "persistence"},
             )
+
+    def test_pyrecest_filter_backend_smoke(self) -> None:
+        if not is_pyrecest_filter_available():
+            self.skipTest("PyRecEst SO3ProductParticleFilter is not available")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_toy(root / "seq.npz", frames=45)
+            seq = load_dataset(root, "", frame_rate=20, num_joints=23)[0]
+
+            rng = np.random.default_rng(23)
+            meas = make_synthetic_measurements(seq.rotations, 8.0, 0.25, rng)
+            result = run_filter(
+                meas.observations,
+                meas.mask,
+                PersistenceTransition(),
+                meas.noise_sigma_rad,
+                num_particles=12,
+                rng=rng,
+                factorized_update=False,
+                resample_threshold=0.75,
+                backend="pyrecest",
+            )
+
+            self.assertEqual(result.estimates.shape, seq.rotations.shape)
+            self.assertTrue(bool(np.all(np.isfinite(result.effective_sample_size))))
+            self.assertTrue(bool(np.all(result.effective_sample_size > 0.0)))
 
     def test_temporal_metrics_are_zero_for_constant_pose(self) -> None:
         rotations = np.broadcast_to(np.eye(3), (5, 23, 3, 3)).copy()
