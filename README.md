@@ -4,6 +4,8 @@ This workspace contains a small prototype for early AMASS/SMPL motion-filtering 
 It reads SMPL-style AMASS `.npz` files, converts local body joint axis-angle poses into SO(3) rotation
 matrices, creates synthetic noisy/occluded measurements, and evaluates transition baselines plus a particle
 filter.
+Measurements can carry per-joint confidence scores, so detector outputs with soft joint reliability can
+downweight uncertain observations instead of dropping them with a hard mask only.
 
 The core SO(3) numerics use NumPy, and quaternion product-state distributions use PyRecEst as their
 backend. The package source follows a `src/pose_filter` layout.
@@ -107,6 +109,8 @@ Useful optional fields:
 - `process_noise_deg`
 - `filter_backend`: `numpy` or `pyrecest`
 - `proposal_gain`
+- `confidence_noise_std`
+- `min_confidence`
 - `factorized_update`
 - `resample_threshold`
 - `ablation_particle_counts`
@@ -120,6 +124,10 @@ Useful optional fields:
 from the current pose and estimates residual noise for sampling. This keeps the first prototype runnable
 without PyTorch while preserving the `sample_next` / `log_prob_next` interface expected by later neural
 models.
+
+Synthetic confidence values default to the original binary mask behavior when `confidence_noise_std` is
+zero. Setting `confidence_noise_std > 0` samples observed-joint confidences in `[min_confidence, 1]`; these
+scores scale both the guided proposal correction and the measurement likelihood.
 
 The experiment outputs include research-oriented diagnostics beyond aggregate pose error:
 observed-vs-occluded joint errors, per-joint errors, and temporal acceleration/jerk metrics for the raw

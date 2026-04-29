@@ -64,6 +64,8 @@ def run_experiment(config: dict) -> dict:
     seed = int(config.get("seed", 0))
     output_dir = Path(config.get("output_dir", "runs/default"))
     output_dir.mkdir(parents=True, exist_ok=True)
+    confidence_noise_std = float(config.get("confidence_noise_std", 0.0))
+    min_confidence = float(config.get("min_confidence", 0.2))
     proposal_gain = float(config.get("proposal_gain", 0.2))
     factorized_update = bool(config.get("factorized_update", True))
     resample_threshold = float(config.get("resample_threshold", 0.5))
@@ -112,6 +114,8 @@ def run_experiment(config: dict) -> dict:
         num_particles,
         seed,
         proposal_gain=proposal_gain,
+        confidence_noise_std=confidence_noise_std,
+        min_confidence=min_confidence,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
         filter_backend=filter_backend,
@@ -150,6 +154,8 @@ def run_experiment(config: dict) -> dict:
                 config, "ablation_resample_thresholds", [resample_threshold]
             )
         ],
+        confidence_noise_std=confidence_noise_std,
+        min_confidence=min_confidence,
         filter_backend=filter_backend,
     )
     robust_rows = robustness_rows(
@@ -163,6 +169,8 @@ def run_experiment(config: dict) -> dict:
         num_particles,
         seed,
         proposal_gain=proposal_gain,
+        confidence_noise_std=confidence_noise_std,
+        min_confidence=min_confidence,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
         filter_backend=filter_backend,
@@ -175,6 +183,8 @@ def run_experiment(config: dict) -> dict:
         num_particles,
         seed + 4242,
         proposal_gain=proposal_gain,
+        confidence_noise_std=confidence_noise_std,
+        min_confidence=min_confidence,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
         filter_backend=filter_backend,
@@ -215,6 +225,8 @@ def run_experiment(config: dict) -> dict:
         "num_particles": num_particles,
         "process_noise_deg": config.get("process_noise_deg"),
         "proposal_gain": proposal_gain,
+        "confidence_noise_std": confidence_noise_std,
+        "min_confidence": min_confidence,
         "factorized_update": factorized_update,
         "resample_threshold": resample_threshold,
         "filter_backend": filter_backend,

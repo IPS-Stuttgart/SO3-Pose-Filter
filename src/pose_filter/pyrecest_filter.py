@@ -8,6 +8,8 @@ from .particle_filter import (
     ParticleFilterResult,
     _normalize_log_weights,
     _normalize_log_weights_axis0,
+    _prepare_confidence,
+    _prepare_joint_noise,
     initialize_particles,
     systematic_resample,
 )
@@ -55,6 +57,8 @@ def run_pyrecest_particle_filter(
     resample_threshold: float = 0.5,
     factorized_update: bool = True,
     proposal_gain: float = 0.2,
+    confidence: np.ndarray | None = None,
+    joint_noise_sigma_rad: np.ndarray | None = None,
 ) -> ParticleFilterResult:
     """Run the SO(3)^K particle filter using PyRecEst quaternion product particles.
 
@@ -66,9 +70,13 @@ def run_pyrecest_particle_filter(
 
     observations = np.asarray(observations, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
+    confidence = _prepare_confidence(mask, confidence)
+    joint_noise_sigma_rad = _prepare_joint_noise(
+        noise_sigma_rad, mask, joint_noise_sigma_rad
+    )
     t_steps, num_joints = observations.shape[:2]
     initial_rotations = initialize_particles(
-        observations[0], mask[0], num_particles, noise_sigma_rad, rng
+        observations[0], confidence[0] > 0.0, num_particles, noise_sigma_rad, rng
     )
     filter_state = SO3ProductParticleFilter(
         int(num_particles),
@@ -93,18 +101,15 @@ def run_pyrecest_particle_filter(
         if proposal_gain > 0.0:
             particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
             delta_to_observation = left_delta(particles, observations[t])
-            correction = np.where(
-                mask[t][None, :, None],
-                float(proposal_gain) * delta_to_observation,
-                0.0,
-            )
+            correction_weight = float(proposal_gain) * confidence[t][None, :, None]
+            correction = correction_weight * delta_to_observation
             corrected = left_apply_delta(correction, particles)
             filter_state.set_particles(rotations_to_quaternions(corrected))
 
         particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
         dist = geodesic_distance(particles, observations[t])
-        joint_ll = -0.5 * (dist / max(noise_sigma_rad, 1e-8)) ** 2
-        joint_ll = np.where(mask[t][None, :], joint_ll, 0.0)
+        joint_sigma = joint_noise_sigma_rad[t][None, :]
+        joint_ll = -0.5 * confidence[t][None, :] * (dist / joint_sigma) ** 2
 
         if factorized_update:
             joint_weights, log_joint_weights = _normalize_log_weights_axis0(
