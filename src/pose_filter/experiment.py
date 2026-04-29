@@ -100,6 +100,7 @@ def run_experiment(config: dict) -> dict:
         config["transition_model"],
         train,
         process_noise_deg=config.get("process_noise_deg"),
+        config=config,
     )
 
     transition_rows = transition_metric_rows(

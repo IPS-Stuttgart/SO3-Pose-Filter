@@ -20,6 +20,7 @@ from pose_filter.so3 import axis_angle_to_matrix
 from pose_filter.transitions import (
     GaussianRandomWalkTransition,
     LearnedDeltaTransition,
+    MLPDeltaTransition,
     PersistenceTransition,
 )
 from run_first_results_benchmark import run_first_results_benchmark
@@ -131,6 +132,7 @@ class PipelineTests(unittest.TestCase):
                 PersistenceTransition(),
                 GaussianRandomWalkTransition.fit(train),
                 LearnedDeltaTransition.fit(train),
+                MLPDeltaTransition.fit(train, hidden_dim=12, epochs=3, seed=5),
             ]
             rng = np.random.default_rng(9)
             meas = make_synthetic_measurements(
@@ -181,6 +183,37 @@ class PipelineTests(unittest.TestCase):
                 )
             )
             self.assertTrue(any(row["ablation"] == "factorized_update" for row in rows))
+
+    def test_mlp_delta_checkpoint_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx in range(3):
+                _write_toy(root / f"seq_{idx}.npz", frames=48 + idx * 3)
+            train = load_dataset(root, "", frame_rate=20, num_joints=23)
+            model = MLPDeltaTransition.fit(
+                train,
+                hidden_dim=10,
+                epochs=4,
+                learning_rate=0.002,
+                batch_size=16,
+                seed=7,
+            )
+            checkpoint = root / "mlp_transition.npz"
+            model.save_npz(checkpoint)
+            loaded = MLPDeltaTransition.load_npz(checkpoint)
+
+            pred = model.deterministic_next(train[0].rotations[:2])
+            loaded_pred = loaded.deterministic_next(train[0].rotations[:2])
+
+            self.assertTrue(np.allclose(pred, loaded_pred))
+            self.assertEqual(
+                loaded.sample_next(
+                    train[0].rotations[0],
+                    np.random.default_rng(1),
+                    n_samples=2,
+                ).shape,
+                (2, 23, 3, 3),
+            )
 
     def test_filter_evaluation_reports_smoother_baselines(self) -> None:
         with tempfile.TemporaryDirectory() as td:

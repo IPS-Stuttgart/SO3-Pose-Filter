@@ -148,9 +148,21 @@ jobs:
               "persistence",
               "gaussian_rw",
               "pyrecest_pf",
+              "mlp_delta",
+              "pyrecest_mlp_pf",
           ]
-          assert benchmark_summary["row_count"] == 16
-          assert benchmark_summary["acceptance"]["pyrecest_pf_beats_raw_any"]
+          assert benchmark_summary["row_count"] == 24
+          assert benchmark_summary["acceptance"]["target_method"] == "pyrecest_pf"
+          assert benchmark_summary["acceptance"]["target_beats_raw_any"]
+
+          transition_by_model = {
+              row["model"]: row
+              for row in benchmark_summary["transition_metrics"]
+              if row["metric"] == "one_step_error_deg"
+          }
+          assert "mlp_delta" in transition_by_model
+          assert "gaussian_rw" in transition_by_model
+          assert float(transition_by_model["mlp_delta"]["value"]) > 0.0
 
           acceptance = {
               "primary_filter_metrics_mean": means,

@@ -58,9 +58,9 @@ Limit a sweep to selected transition models:
 python scripts\run_model_sweep.py --config configs\example.json --output runs\sweep --models persistence gaussian_rw
 ```
 
-Run the first-results benchmark wrapper, which reports raw observations, deterministic persistence, the
-NumPy Gaussian random-walk particle filter, and the PyRecEst-backed particle filter on one noise/occlusion
-grid:
+Run the first-results benchmark wrapper, which reports raw observations, deterministic persistence,
+Gaussian random-walk particle filters, and the nonlinear MLP transition particle filters on one
+noise/occlusion grid:
 
 ```powershell
 python scripts\run_first_results_benchmark.py `
@@ -79,6 +79,12 @@ The benchmark writes:
 A lightweight full-ACCAD-window result snapshot is committed under
 `results/accad_dynamic_first_results/`. It was generated from the bounded dynamic-window selection of
 `D:\Uni-Data\ACCAD`, not from committed raw motion files.
+
+The first nonlinear learned-transition snapshot is committed under
+`results/accad_dynamic_mlp_single_point/`. It evaluates the same held-out dynamic ACCAD windows at
+`noise_deg=10` and `occlusion_prob=0.25`; the MLP transition particle filter reaches `10.61 deg` mean
+tracking error versus `11.49 deg` for the Gaussian random-walk particle filter, `15.96 deg` for raw
+observations, and `18.90 deg` for persistence.
 
 ## Real AMASS Data
 
@@ -122,11 +128,18 @@ python scripts\prepare_amass_windows.py `
 python scripts\run_model_sweep.py `
   --config configs\accad_dynamic.example.json `
   --output runs\accad_dynamic_sweep `
-  --models persistence gaussian_rw learned_delta
+  --models persistence gaussian_rw learned_delta mlp_delta
 
 python scripts\run_first_results_benchmark.py `
   --config configs\accad_dynamic_benchmark.example.json `
   --output runs\accad_dynamic_first_results
+
+python scripts\run_first_results_benchmark.py `
+  --config configs\accad_dynamic_benchmark.example.json `
+  --output runs\accad_dynamic_mlp_single_point `
+  --methods raw persistence gaussian_rw pyrecest_pf mlp_delta `
+  --noise-deg 10 `
+  --occlusion-prob 0.25
 ```
 
 `prepare_amass_windows.py` records `motion_deg_per_frame` for every selected segment so results can be
@@ -164,7 +177,7 @@ Required fields:
 - `noise_deg`
 - `occlusion_prob`
 - `num_particles`
-- `transition_model`: `persistence`, `gaussian_rw`, or `learned_delta`
+- `transition_model`: `persistence`, `gaussian_rw`, `learned_delta`, or `mlp_delta`
 
 Useful optional fields:
 
@@ -190,6 +203,14 @@ Useful optional fields:
 - `ablation_proposal_gains`
 - `ablation_factorized_updates`
 - `ablation_resample_thresholds`
+- `mlp_hidden_dim`
+- `mlp_epochs`
+- `mlp_learning_rate`
+- `mlp_weight_decay`
+- `mlp_batch_size`
+- `transition_checkpoint`
+- `transition_load_checkpoint`
+- `transition_save_checkpoint`
 
 ## Notes
 
@@ -197,6 +218,12 @@ Useful optional fields:
 from the current pose and estimates residual noise for sampling. This keeps the first prototype runnable
 without PyTorch while preserving the `sample_next` / `log_prob_next` interface expected by later neural
 models.
+
+`mlp_delta` is a nonlinear NumPy MLP transition baseline. It standardizes the current pose log-map, trains
+a compact one-hidden-layer tanh network to predict the next tangent-space delta, estimates residual
+per-joint variance, and supports `.npz` checkpoint save/load through `transition_checkpoint`. This keeps the
+learned baseline CI-friendly while providing a stronger target than the linear ridge model before adding a
+full PyTorch GRU.
 
 Synthetic confidence values default to the original binary mask behavior when `confidence_noise_std` is
 zero. Setting `confidence_noise_std > 0` samples observed-joint confidences in `[min_confidence, 1]`; these
