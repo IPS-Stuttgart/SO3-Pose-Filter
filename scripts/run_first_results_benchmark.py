@@ -31,6 +31,7 @@ METHODS = (
     "mlp_delta",
     "pyrecest_mlp_pf",
     "history_mlp_delta",
+    "gru_delta",
 )
 
 
@@ -141,7 +142,9 @@ def _acceptance(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str,
     target_method = str(
         config.get(
             "benchmark_acceptance_method",
-            "history_mlp_delta"
+            "gru_delta"
+            if any(row["method"] == "gru_delta" for row in rows)
+            else "history_mlp_delta"
             if any(row["method"] == "history_mlp_delta" for row in rows)
             else "pyrecest_mlp_pf"
             if any(row["method"] == "pyrecest_mlp_pf" for row in rows)
@@ -211,6 +214,8 @@ def _write_plots(
             "benchmark_heatmap_method",
             "pyrecest_mlp_pf"
             if "pyrecest_mlp_pf" in methods
+            else "gru_delta"
+            if "gru_delta" in methods
             else "history_mlp_delta"
             if "history_mlp_delta" in methods
             else "pyrecest_pf"
@@ -423,6 +428,30 @@ def run_first_results_benchmark(
             filter_backend="numpy",
         )
         history_mlp_rows_by_key = {_grid_key(row): row for row in history_mlp_rows}
+    gru_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
+    needs_gru = "gru_delta" in methods
+    if needs_gru:
+        gru_model = build_transition_model(
+            "gru_delta",
+            train,
+            process_noise_deg=config.get("process_noise_deg"),
+            config=config,
+        )
+        gru_rows = robustness_rows(
+            test,
+            gru_model,
+            noise_grid,
+            occlusion_grid,
+            num_particles,
+            seed,
+            proposal_gain=proposal_gain,
+            confidence_noise_std=confidence_noise_std,
+            min_confidence=min_confidence,
+            factorized_update=factorized_update,
+            resample_threshold=resample_threshold,
+            filter_backend="numpy",
+        )
+        gru_rows_by_key = {_grid_key(row): row for row in gru_rows}
 
     rows: list[dict[str, Any]] = []
     for base_row in base_rows:
@@ -511,6 +540,18 @@ def run_first_results_benchmark(
                     num_particles,
                 )
             )
+        if "gru_delta" in methods:
+            rows.append(
+                _method_row(
+                    "gru_delta",
+                    gru_rows_by_key[key],
+                    base_row,
+                    "filter_error_deg",
+                    "gru_delta",
+                    "numpy",
+                    num_particles,
+                )
+            )
 
     metrics_path = output_dir / "benchmark_metrics.csv"
     _write_csv(metrics_path, rows)
@@ -534,6 +575,15 @@ def run_first_results_benchmark(
             transition_metric_rows(
                 "history_mlp_delta",
                 history_mlp_model,
+                test,
+                rollout_horizon=int(config.get("rollout_horizon", 10)),
+            )
+        )
+    if needs_gru:
+        transition_rows.extend(
+            transition_metric_rows(
+                "gru_delta",
+                gru_model,
                 test,
                 rollout_horizon=int(config.get("rollout_horizon", 10)),
             )

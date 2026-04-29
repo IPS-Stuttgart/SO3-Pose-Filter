@@ -19,10 +19,12 @@ from pose_filter.pyrecest_filter import is_pyrecest_filter_available
 from pose_filter.so3 import axis_angle_to_matrix
 from pose_filter.transitions import (
     GaussianRandomWalkTransition,
+    GRUDeltaTransition,
     HistoryMLPDeltaTransition,
     LearnedDeltaTransition,
     MLPDeltaTransition,
     PersistenceTransition,
+    is_torch_available,
 )
 from run_first_results_benchmark import run_first_results_benchmark
 from prepare_amass_windows import prepare_windows
@@ -132,6 +134,15 @@ class PipelineTests(unittest.TestCase):
                 _write_toy(raw_dir / f"seq_{idx}.npz", frames=90 + idx * 3)
 
             output_dir = root / "private_eval"
+            methods = [
+                "raw",
+                "persistence",
+                "gaussian_rw",
+                "mlp_delta",
+                "history_mlp_delta",
+            ]
+            if is_torch_available():
+                methods.append("gru_delta")
             summary = run_private_accad_eval(
                 {
                     "source_data_root": str(raw_dir),
@@ -148,13 +159,7 @@ class PipelineTests(unittest.TestCase):
                     "num_particles": 8,
                     "benchmark_num_particles": [8],
                     "benchmark_seeds": [3],
-                    "benchmark_methods": [
-                        "raw",
-                        "persistence",
-                        "gaussian_rw",
-                        "mlp_delta",
-                        "history_mlp_delta",
-                    ],
+                    "benchmark_methods": methods,
                     "benchmark_noise_deg": [5.0],
                     "benchmark_occlusion_prob": [0.0, 0.25],
                     "transition_model": "gaussian_rw",
@@ -172,6 +177,10 @@ class PipelineTests(unittest.TestCase):
                     "history_mlp_hidden_dim": 8,
                     "history_mlp_epochs": 2,
                     "history_mlp_batch_size": 16,
+                    "gru_history_length": 3,
+                    "gru_hidden_dim": 8,
+                    "gru_epochs": 2,
+                    "gru_device": "cpu",
                     "proposal_gain": 0.2,
                     "factorized_update": True,
                     "resample_threshold": 0.5,
@@ -179,13 +188,49 @@ class PipelineTests(unittest.TestCase):
             )
 
             self.assertEqual(summary["window_report"]["selected_count"], 4)
-            self.assertEqual(summary["methods"][-1], "history_mlp_delta")
+            self.assertEqual(summary["methods"][-1], methods[-1])
             self.assertEqual(summary["runs"][0]["num_particles"], 8)
             self.assertTrue((output_dir / "aggregate_benchmark_metrics.csv").exists())
             self.assertTrue((output_dir / "aggregate_transition_metrics.csv").exists())
             self.assertTrue((output_dir / "aggregate_method_means.csv").exists())
             self.assertTrue((output_dir / "private_accad_eval_summary.json").exists())
             self.assertTrue((output_dir / "private_accad_eval_summary.md").exists())
+
+    def test_gru_delta_checkpoint_roundtrip_if_torch_available(self) -> None:
+        if not is_torch_available():
+            self.skipTest("PyTorch is not available")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx in range(3):
+                _write_toy(root / f"seq_{idx}.npz", frames=54 + idx * 3)
+            train = load_dataset(root, "", frame_rate=20, num_joints=23)
+            model = GRUDeltaTransition.fit(
+                train,
+                history_length=3,
+                hidden_dim=8,
+                epochs=2,
+                learning_rate=0.003,
+                seed=13,
+                device="cpu",
+            )
+            history = [train[0].rotations[0], train[0].rotations[1]]
+            checkpoint = root / "gru_transition.npz"
+            model.save_npz(checkpoint)
+            loaded = GRUDeltaTransition.load_npz(checkpoint)
+
+            pred = model.deterministic_next_from_history(history)
+            loaded_pred = loaded.deterministic_next_from_history(history)
+
+            self.assertTrue(np.allclose(pred, loaded_pred))
+            self.assertEqual(model.history_length, 3)
+            self.assertEqual(
+                loaded.sample_next_from_history(
+                    history,
+                    np.random.default_rng(2),
+                ).shape,
+                (23, 3, 3),
+            )
 
     def test_transition_models_and_filter_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as td:

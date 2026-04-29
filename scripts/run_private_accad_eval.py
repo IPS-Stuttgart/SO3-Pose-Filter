@@ -23,6 +23,7 @@ DEFAULT_METHODS = (
     "gaussian_rw",
     "mlp_delta",
     "history_mlp_delta",
+    "gru_delta",
 )
 
 
@@ -121,6 +122,10 @@ def _benchmark_config(
     run_config.setdefault(
         "history_transition_checkpoint",
         str(checkpoint_dir / "history_mlp_delta_checkpoint.npz"),
+    )
+    run_config.setdefault(
+        "gru_transition_checkpoint",
+        str(checkpoint_dir / "gru_delta_checkpoint.npz"),
     )
     return run_config
 
@@ -291,6 +296,10 @@ def run_private_accad_eval(
         "best_tracking_error_deg": best_row["mean_tracking_error_deg"],
         "history_mlp_beats_gaussian_rw": (
             means_by_method.get("history_mlp_delta", float("inf"))
+            < means_by_method.get("gaussian_rw", float("-inf"))
+        ),
+        "gru_beats_gaussian_rw": (
+            means_by_method.get("gru_delta", float("inf"))
             < means_by_method.get("gaussian_rw", float("-inf"))
         ),
         "mlp_beats_gaussian_rw": (

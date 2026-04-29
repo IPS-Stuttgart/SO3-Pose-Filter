@@ -11,6 +11,9 @@ requires-python = ">=3.11"
 authors = [{ name = "Florian Pfaff" }]
 dependencies = ["numpy>=1.24", "pyrecest>=1.1.1"]
 
+[project.optional-dependencies]
+torch = ["torch>=2.2"]
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 

@@ -22,6 +22,12 @@ python scripts\make_toy_amass.py --output data\tiny_amass --sequences 6 --frames
 python scripts\run_experiment.py --config configs\example.json
 ```
 
+Install the optional PyTorch extra when using the GRU transition baseline:
+
+```powershell
+python -m pip install -e ".[torch]"
+```
+
 Outputs are written to `runs/example/`:
 
 - `summary.json`
@@ -121,7 +127,7 @@ python scripts\prepare_amass_windows.py `
 python scripts\run_model_sweep.py `
   --config configs\accad_dynamic.example.json `
   --output runs\accad_dynamic_sweep `
-  --models persistence gaussian_rw learned_delta mlp_delta history_mlp_delta
+  --models persistence gaussian_rw learned_delta mlp_delta history_mlp_delta gru_delta
 
 python scripts\run_first_results_benchmark.py `
   --config configs\accad_dynamic_benchmark.example.json `
@@ -151,7 +157,7 @@ python scripts\run_private_accad_eval.py `
 ```
 
 The private runner selects bounded dynamic windows, runs the configured seed/particle/noise/occlusion grid,
-and aggregates `gaussian_rw`, `mlp_delta`, and `history_mlp_delta` into:
+and aggregates `gaussian_rw`, `mlp_delta`, `history_mlp_delta`, and `gru_delta` into:
 
 - `runs/private_accad_eval/aggregate_benchmark_metrics.csv`
 - `runs/private_accad_eval/aggregate_transition_metrics.csv`
@@ -203,7 +209,7 @@ Required fields:
 - `noise_deg`
 - `occlusion_prob`
 - `num_particles`
-- `transition_model`: `persistence`, `gaussian_rw`, `learned_delta`, `mlp_delta`, or `history_mlp_delta`
+- `transition_model`: `persistence`, `gaussian_rw`, `learned_delta`, `mlp_delta`, `history_mlp_delta`, or `gru_delta`
 
 Useful optional fields:
 
@@ -245,6 +251,14 @@ Useful optional fields:
 - `history_mlp_learning_rate`
 - `history_mlp_weight_decay`
 - `history_mlp_batch_size`
+- `gru_transition_checkpoint`
+- `gru_history_length`
+- `gru_hidden_dim`
+- `gru_num_layers`
+- `gru_epochs`
+- `gru_learning_rate`
+- `gru_weight_decay`
+- `gru_device`
 
 ## Notes
 
@@ -263,6 +277,11 @@ full PyTorch GRU.
 pose plus `history_length` previous SO(3) deltas and the NumPy/PyRecEst particle filters preserve aligned
 per-particle histories during prediction and resampling. This is the first velocity-aware transition model
 while keeping the same public transition interface.
+
+`gru_delta` is an optional PyTorch transition baseline. It trains a compact GRU over recent pose log-maps to
+predict the next tangent-space SO(3) delta, uses residual variance for stochastic particle prediction, and
+stores checkpoints as NumPy `.npz` files. Set `gru_device` to `auto`, `cpu`, or `cuda`; `auto` uses CUDA when
+available and otherwise falls back to CPU.
 
 Synthetic confidence values default to the original binary mask behavior when `confidence_noise_std` is
 zero. Setting `confidence_noise_std > 0` samples observed-joint confidences in `[min_confidence, 1]`; these
