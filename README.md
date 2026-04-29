@@ -74,8 +74,35 @@ directory. Keep generated real-data outputs under `runs/`; they are ignored by g
 The ACCAD first-results benchmark workflow uses `configs/accad_first_results.example.json`. It downloads
 the `AMASS_ACCAD_SAMPLE` secret, chunks the motion file into train/validation/test sequence windows, runs
 the PyRecEst-backed Gaussian random-walk filter, runs a compact transition-model sweep, and uploads CSV,
-JSON, and SVG artifacts. The workflow asserts that the filter beats raw synthetic observations and the
-persistence rollout baseline under the configured moderate noise/occlusion setting.
+JSON, and SVG artifacts. The workflow asserts that the filter beats raw synthetic observations and reports
+the persistence rollout baseline under the configured moderate noise/occlusion setting.
+
+For a local ACCAD run on a full dataset checkout, first select a bounded set of dynamic windows and then
+run the dynamic benchmark config:
+
+```powershell
+python scripts\prepare_amass_windows.py `
+  --data-root D:\Uni-Data\ACCAD `
+  --output-dir data\accad_dynamic_segments `
+  --report runs\accad_dynamic_segments_report.json `
+  --manifest runs\accad_dynamic_segments_manifest.csv `
+  --frame-rate 20 `
+  --segment-frames 80 `
+  --stride-frames 40 `
+  --max-segments 48 `
+  --selection top-motion `
+  --max-per-file 2
+
+python scripts\run_model_sweep.py `
+  --config configs\accad_dynamic.example.json `
+  --output runs\accad_dynamic_sweep `
+  --models persistence gaussian_rw learned_delta
+```
+
+`prepare_amass_windows.py` records `motion_deg_per_frame` for every selected segment so results can be
+stratified by motion intensity. CI deliberately uses the same selector with `--max-files 1` and
+`--max-segments 6`, so pull requests exercise the benchmark path without scanning or evaluating a full
+AMASS dataset.
 
 ## PyRecEst Backend
 
