@@ -19,7 +19,9 @@ from pose_filter.pyrecest_filter import is_pyrecest_filter_available
 from pose_filter.so3 import axis_angle_to_matrix
 from pose_filter.transitions import (
     GaussianRandomWalkTransition,
+    HistoryMLPDeltaTransition,
     LearnedDeltaTransition,
+    MLPDeltaTransition,
     PersistenceTransition,
 )
 from run_first_results_benchmark import run_first_results_benchmark
@@ -131,6 +133,10 @@ class PipelineTests(unittest.TestCase):
                 PersistenceTransition(),
                 GaussianRandomWalkTransition.fit(train),
                 LearnedDeltaTransition.fit(train),
+                MLPDeltaTransition.fit(train, hidden_dim=12, epochs=3, seed=5),
+                HistoryMLPDeltaTransition.fit(
+                    train, history_length=2, hidden_dim=12, epochs=3, seed=6
+                ),
             ]
             rng = np.random.default_rng(9)
             meas = make_synthetic_measurements(
@@ -181,6 +187,70 @@ class PipelineTests(unittest.TestCase):
                 )
             )
             self.assertTrue(any(row["ablation"] == "factorized_update" for row in rows))
+
+    def test_mlp_delta_checkpoint_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx in range(3):
+                _write_toy(root / f"seq_{idx}.npz", frames=48 + idx * 3)
+            train = load_dataset(root, "", frame_rate=20, num_joints=23)
+            model = MLPDeltaTransition.fit(
+                train,
+                hidden_dim=10,
+                epochs=4,
+                learning_rate=0.002,
+                batch_size=16,
+                seed=7,
+            )
+            checkpoint = root / "mlp_transition.npz"
+            model.save_npz(checkpoint)
+            loaded = MLPDeltaTransition.load_npz(checkpoint)
+
+            pred = model.deterministic_next(train[0].rotations[:2])
+            loaded_pred = loaded.deterministic_next(train[0].rotations[:2])
+
+            self.assertTrue(np.allclose(pred, loaded_pred))
+            self.assertEqual(
+                loaded.sample_next(
+                    train[0].rotations[0],
+                    np.random.default_rng(1),
+                    n_samples=2,
+                ).shape,
+                (2, 23, 3, 3),
+            )
+
+    def test_history_mlp_delta_uses_history_and_roundtrips(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx in range(3):
+                _write_toy(root / f"seq_{idx}.npz", frames=54 + idx * 3)
+            train = load_dataset(root, "", frame_rate=20, num_joints=23)
+            model = HistoryMLPDeltaTransition.fit(
+                train,
+                history_length=2,
+                hidden_dim=10,
+                epochs=4,
+                learning_rate=0.002,
+                batch_size=16,
+                seed=11,
+            )
+            history = [train[0].rotations[0], train[0].rotations[1]]
+            checkpoint = root / "history_mlp_transition.npz"
+            model.save_npz(checkpoint)
+            loaded = HistoryMLPDeltaTransition.load_npz(checkpoint)
+
+            pred = model.deterministic_next_from_history(history)
+            loaded_pred = loaded.deterministic_next_from_history(history)
+
+            self.assertTrue(np.allclose(pred, loaded_pred))
+            self.assertEqual(model.history_length, 2)
+            self.assertEqual(
+                loaded.sample_next_from_history(
+                    history,
+                    np.random.default_rng(2),
+                ).shape,
+                (23, 3, 3),
+            )
 
     def test_filter_evaluation_reports_smoother_baselines(self) -> None:
         with tempfile.TemporaryDirectory() as td:

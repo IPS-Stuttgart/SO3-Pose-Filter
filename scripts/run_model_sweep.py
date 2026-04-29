@@ -12,7 +12,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from pose_filter.experiment import load_config, run_experiment  # noqa: E402
 
-MODELS = ("persistence", "gaussian_rw", "learned_delta")
+DEFAULT_MODELS = ("persistence", "gaussian_rw", "learned_delta")
+ALL_MODELS = (*DEFAULT_MODELS, "mlp_delta", "history_mlp_delta")
 
 
 def _metric(summary: dict, name: str) -> float:
@@ -31,7 +32,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def run_sweep(
-    config: dict, output_root: Path, models: tuple[str, ...] = MODELS
+    config: dict, output_root: Path, models: tuple[str, ...] = DEFAULT_MODELS
 ) -> dict:
     rows: list[dict[str, Any]] = []
     summaries = {}
@@ -86,8 +87,8 @@ def main() -> None:
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=MODELS,
-        default=list(MODELS),
+        choices=ALL_MODELS,
+        default=list(DEFAULT_MODELS),
         help="Transition models to evaluate.",
     )
     args = parser.parse_args()

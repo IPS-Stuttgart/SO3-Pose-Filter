@@ -23,7 +23,15 @@ from pose_filter.experiment import load_config  # noqa: E402
 from pose_filter.plotting import heatmap_svg, line_plot_svg  # noqa: E402
 from pose_filter.transitions import build_transition_model  # noqa: E402
 
-METHODS = ("raw", "persistence", "gaussian_rw", "pyrecest_pf")
+METHODS = (
+    "raw",
+    "persistence",
+    "gaussian_rw",
+    "pyrecest_pf",
+    "mlp_delta",
+    "pyrecest_mlp_pf",
+    "history_mlp_delta",
+)
 
 
 def _float_list(value: Any, default: list[float]) -> list[float]:
@@ -130,13 +138,44 @@ def _acceptance(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str,
     )
     representative_by_method = {row["method"]: row for row in representative}
     pyrecest = representative_by_method.get("pyrecest_pf")
+    target_method = str(
+        config.get(
+            "benchmark_acceptance_method",
+            "history_mlp_delta"
+            if any(row["method"] == "history_mlp_delta" for row in rows)
+            else "pyrecest_mlp_pf"
+            if any(row["method"] == "pyrecest_mlp_pf" for row in rows)
+            else "pyrecest_pf",
+        )
+    )
+    target = representative_by_method.get(target_method)
     return {
+        "target_method": target_method,
         "representative_noise_deg": representative[0]["noise_deg"]
         if representative
         else None,
         "representative_occlusion_prob": representative[0]["occlusion_prob"]
         if representative
         else None,
+        "target_beats_raw_at_representative": (
+            bool(target["improvement_vs_raw_deg"] > 0.0)
+            if target is not None
+            else None
+        ),
+        "target_beats_persistence_at_representative": (
+            bool(target["improvement_vs_persistence_deg"] > 0.0)
+            if target is not None
+            else None
+        ),
+        "target_beats_raw_any": any(
+            row["method"] == target_method and float(row["improvement_vs_raw_deg"]) > 0.0
+            for row in rows
+        ),
+        "target_beats_persistence_any": any(
+            row["method"] == target_method
+            and float(row["improvement_vs_persistence_deg"]) > 0.0
+            for row in rows
+        ),
         "pyrecest_pf_beats_raw_at_representative": (
             bool(pyrecest["improvement_vs_raw_deg"] > 0.0)
             if pyrecest is not None
@@ -170,7 +209,13 @@ def _write_plots(
     plot_method = str(
         config.get(
             "benchmark_heatmap_method",
-            "pyrecest_pf" if "pyrecest_pf" in methods else "gaussian_rw",
+            "pyrecest_mlp_pf"
+            if "pyrecest_mlp_pf" in methods
+            else "history_mlp_delta"
+            if "history_mlp_delta" in methods
+            else "pyrecest_pf"
+            if "pyrecest_pf" in methods
+            else "gaussian_rw",
         )
     )
     heatmap_rows = [row for row in rows if row["method"] == plot_method]
@@ -268,10 +313,11 @@ def run_first_results_benchmark(
     if not test:
         test = val or train
 
-    model = build_transition_model(
+    gaussian_model = build_transition_model(
         "gaussian_rw",
         train,
         process_noise_deg=config.get("process_noise_deg"),
+        config=config,
     )
     proposal_gain = float(config.get("proposal_gain", 0.2))
     confidence_noise_std = float(config.get("confidence_noise_std", 0.0))
@@ -280,7 +326,7 @@ def run_first_results_benchmark(
     resample_threshold = float(config.get("resample_threshold", 0.5))
     base_rows = robustness_rows(
         test,
-        model,
+        gaussian_model,
         noise_grid,
         occlusion_grid,
         num_particles,
@@ -296,7 +342,7 @@ def run_first_results_benchmark(
     if "pyrecest_pf" in methods:
         pyrecest_rows = robustness_rows(
             test,
-            model,
+            gaussian_model,
             noise_grid,
             occlusion_grid,
             num_particles,
@@ -309,6 +355,74 @@ def run_first_results_benchmark(
             filter_backend="pyrecest",
         )
         pyrecest_rows_by_key = {_grid_key(row): row for row in pyrecest_rows}
+    mlp_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
+    pyrecest_mlp_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
+    needs_mlp = "mlp_delta" in methods or "pyrecest_mlp_pf" in methods
+    if needs_mlp:
+        mlp_model = build_transition_model(
+            "mlp_delta",
+            train,
+            process_noise_deg=config.get("process_noise_deg"),
+            config=config,
+        )
+        if "mlp_delta" in methods:
+            mlp_rows = robustness_rows(
+                test,
+                mlp_model,
+                noise_grid,
+                occlusion_grid,
+                num_particles,
+                seed,
+                proposal_gain=proposal_gain,
+                confidence_noise_std=confidence_noise_std,
+                min_confidence=min_confidence,
+                factorized_update=factorized_update,
+                resample_threshold=resample_threshold,
+                filter_backend="numpy",
+            )
+            mlp_rows_by_key = {_grid_key(row): row for row in mlp_rows}
+        if "pyrecest_mlp_pf" in methods:
+            pyrecest_mlp_rows = robustness_rows(
+                test,
+                mlp_model,
+                noise_grid,
+                occlusion_grid,
+                num_particles,
+                seed,
+                proposal_gain=proposal_gain,
+                confidence_noise_std=confidence_noise_std,
+                min_confidence=min_confidence,
+                factorized_update=factorized_update,
+                resample_threshold=resample_threshold,
+                filter_backend="pyrecest",
+            )
+            pyrecest_mlp_rows_by_key = {
+                _grid_key(row): row for row in pyrecest_mlp_rows
+            }
+    history_mlp_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
+    needs_history_mlp = "history_mlp_delta" in methods
+    if needs_history_mlp:
+        history_mlp_model = build_transition_model(
+            "history_mlp_delta",
+            train,
+            process_noise_deg=config.get("process_noise_deg"),
+            config=config,
+        )
+        history_mlp_rows = robustness_rows(
+            test,
+            history_mlp_model,
+            noise_grid,
+            occlusion_grid,
+            num_particles,
+            seed,
+            proposal_gain=proposal_gain,
+            confidence_noise_std=confidence_noise_std,
+            min_confidence=min_confidence,
+            factorized_update=factorized_update,
+            resample_threshold=resample_threshold,
+            filter_backend="numpy",
+        )
+        history_mlp_rows_by_key = {_grid_key(row): row for row in history_mlp_rows}
 
     rows: list[dict[str, Any]] = []
     for base_row in base_rows:
@@ -361,15 +475,69 @@ def run_first_results_benchmark(
                     num_particles,
                 )
             )
+        if "mlp_delta" in methods:
+            rows.append(
+                _method_row(
+                    "mlp_delta",
+                    mlp_rows_by_key[key],
+                    base_row,
+                    "filter_error_deg",
+                    "mlp_delta",
+                    "numpy",
+                    num_particles,
+                )
+            )
+        if "pyrecest_mlp_pf" in methods:
+            rows.append(
+                _method_row(
+                    "pyrecest_mlp_pf",
+                    pyrecest_mlp_rows_by_key[key],
+                    base_row,
+                    "filter_error_deg",
+                    "mlp_delta",
+                    "pyrecest",
+                    num_particles,
+                )
+            )
+        if "history_mlp_delta" in methods:
+            rows.append(
+                _method_row(
+                    "history_mlp_delta",
+                    history_mlp_rows_by_key[key],
+                    base_row,
+                    "filter_error_deg",
+                    "history_mlp_delta",
+                    "numpy",
+                    num_particles,
+                )
+            )
 
     metrics_path = output_dir / "benchmark_metrics.csv"
     _write_csv(metrics_path, rows)
     transition_rows = transition_metric_rows(
         "gaussian_rw",
-        model,
+        gaussian_model,
         test,
         rollout_horizon=int(config.get("rollout_horizon", 10)),
     )
+    if needs_mlp:
+        transition_rows.extend(
+            transition_metric_rows(
+                "mlp_delta",
+                mlp_model,
+                test,
+                rollout_horizon=int(config.get("rollout_horizon", 10)),
+            )
+        )
+    if needs_history_mlp:
+        transition_rows.extend(
+            transition_metric_rows(
+                "history_mlp_delta",
+                history_mlp_model,
+                test,
+                rollout_horizon=int(config.get("rollout_horizon", 10)),
+            )
+        )
     write_csv(output_dir / "transition_metrics.csv", transition_rows)
     plots = _write_plots(output_dir, rows, methods, config)
 

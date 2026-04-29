@@ -58,9 +58,9 @@ Limit a sweep to selected transition models:
 python scripts\run_model_sweep.py --config configs\example.json --output runs\sweep --models persistence gaussian_rw
 ```
 
-Run the first-results benchmark wrapper, which reports raw observations, deterministic persistence, the
-NumPy Gaussian random-walk particle filter, and the PyRecEst-backed particle filter on one noise/occlusion
-grid:
+Run the first-results benchmark wrapper, which reports raw observations, deterministic persistence,
+Gaussian random-walk particle filters, and the nonlinear current-pose/history MLP transition particle
+filters on one noise/occlusion grid:
 
 ```powershell
 python scripts\run_first_results_benchmark.py `
@@ -76,9 +76,8 @@ The benchmark writes:
 - `plots/tracking_error_heatmap.svg`
 - `plots/filter_vs_baselines.svg`
 
-A lightweight full-ACCAD-window result snapshot is committed under
-`results/accad_dynamic_first_results/`. It was generated from the bounded dynamic-window selection of
-`D:\Uni-Data\ACCAD`, not from committed raw motion files.
+Benchmark outputs are local generated artifacts and are excluded from the repository.
+Use `runs/` or `results/` for local result snapshots.
 
 ## Real AMASS Data
 
@@ -91,7 +90,7 @@ The prototype uses the 23 local body joints in `poses[:, 3:72]`, excluding globa
 global translation, hands, and face.
 
 Copy `configs/amass_small.example.json` to a local config and replace `data_root` with the real AMASS
-directory. Keep generated real-data outputs under `runs/`; they are ignored by git.
+directory. Keep generated real-data outputs under `runs/` or `results/`; they are ignored by git.
 
 The ACCAD first-results benchmark workflow uses `configs/accad_first_results.example.json` and
 `configs/accad_first_results_benchmark.example.json`. It downloads the OwnCloud ACCAD sample URL from the
@@ -122,11 +121,25 @@ python scripts\prepare_amass_windows.py `
 python scripts\run_model_sweep.py `
   --config configs\accad_dynamic.example.json `
   --output runs\accad_dynamic_sweep `
-  --models persistence gaussian_rw learned_delta
+  --models persistence gaussian_rw learned_delta mlp_delta history_mlp_delta
 
 python scripts\run_first_results_benchmark.py `
   --config configs\accad_dynamic_benchmark.example.json `
   --output runs\accad_dynamic_first_results
+
+python scripts\run_first_results_benchmark.py `
+  --config configs\accad_dynamic_benchmark.example.json `
+  --output runs\accad_dynamic_mlp_single_point `
+  --methods raw persistence gaussian_rw pyrecest_pf mlp_delta `
+  --noise-deg 10 `
+  --occlusion-prob 0.25
+
+python scripts\run_first_results_benchmark.py `
+  --config configs\accad_dynamic_benchmark.example.json `
+  --output runs\accad_dynamic_history_mlp_single_point `
+  --methods raw persistence gaussian_rw pyrecest_pf mlp_delta history_mlp_delta `
+  --noise-deg 10 `
+  --occlusion-prob 0.25
 ```
 
 `prepare_amass_windows.py` records `motion_deg_per_frame` for every selected segment so results can be
@@ -164,7 +177,7 @@ Required fields:
 - `noise_deg`
 - `occlusion_prob`
 - `num_particles`
-- `transition_model`: `persistence`, `gaussian_rw`, or `learned_delta`
+- `transition_model`: `persistence`, `gaussian_rw`, `learned_delta`, `mlp_delta`, or `history_mlp_delta`
 
 Useful optional fields:
 
@@ -190,6 +203,22 @@ Useful optional fields:
 - `ablation_proposal_gains`
 - `ablation_factorized_updates`
 - `ablation_resample_thresholds`
+- `mlp_hidden_dim`
+- `mlp_epochs`
+- `mlp_learning_rate`
+- `mlp_weight_decay`
+- `mlp_batch_size`
+- `transition_checkpoint`
+- `mlp_transition_checkpoint`
+- `history_transition_checkpoint`
+- `transition_load_checkpoint`
+- `transition_save_checkpoint`
+- `history_length`
+- `history_mlp_hidden_dim`
+- `history_mlp_epochs`
+- `history_mlp_learning_rate`
+- `history_mlp_weight_decay`
+- `history_mlp_batch_size`
 
 ## Notes
 
@@ -197,6 +226,17 @@ Useful optional fields:
 from the current pose and estimates residual noise for sampling. This keeps the first prototype runnable
 without PyTorch while preserving the `sample_next` / `log_prob_next` interface expected by later neural
 models.
+
+`mlp_delta` is a nonlinear NumPy MLP transition baseline. It standardizes the current pose log-map, trains
+a compact one-hidden-layer tanh network to predict the next tangent-space delta, estimates residual
+per-joint variance, and supports `.npz` checkpoint save/load through `transition_checkpoint`. This keeps the
+learned baseline CI-friendly while providing a stronger target than the linear ridge model before adding a
+full PyTorch GRU.
+
+`history_mlp_delta` extends the MLP baseline with recent tangent-space velocities. It trains on the current
+pose plus `history_length` previous SO(3) deltas and the NumPy/PyRecEst particle filters preserve aligned
+per-particle histories during prediction and resampling. This is the first velocity-aware transition model
+while keeping the same public transition interface.
 
 Synthetic confidence values default to the original binary mask behavior when `confidence_noise_std` is
 zero. Setting `confidence_noise_std > 0` samples observed-joint confidences in `[min_confidence, 1]`; these
