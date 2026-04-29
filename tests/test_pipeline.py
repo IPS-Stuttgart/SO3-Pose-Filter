@@ -22,6 +22,7 @@ from pose_filter.transitions import (
     LearnedDeltaTransition,
     PersistenceTransition,
 )
+from prepare_amass_windows import prepare_windows
 
 
 def _write_toy(path: Path, frames: int = 45, fps: float = 60.0) -> None:
@@ -42,6 +43,37 @@ class PipelineTests(unittest.TestCase):
             seqs = load_dataset(root, "", frame_rate=20, num_joints=23)
             self.assertEqual(seqs[0].rotations.shape[1:], (23, 3, 3))
             self.assertEqual(seqs[0].rotations.shape[0], 15)
+
+    def test_prepare_amass_windows_selects_motion_segments(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_toy(root / "dynamic.npz", frames=180)
+            np.savez(
+                root / "static.npz",
+                poses=np.zeros((180, 156), dtype=np.float64),
+                mocap_framerate=np.asarray(60.0),
+            )
+
+            report = prepare_windows(
+                data_root=root,
+                output_dir=root / "segments",
+                report_path=root / "report.json",
+                manifest_path=root / "manifest.csv",
+                frame_rate=20,
+                num_joints=23,
+                segment_frames=20,
+                stride_frames=10,
+                max_segments=2,
+                selection="top-motion",
+                max_per_file=1,
+            )
+
+            self.assertEqual(report["selected_count"], 2)
+            self.assertTrue((root / "manifest.csv").exists())
+            self.assertGreater(report["selected"][0]["motion_deg_per_frame"], 0.0)
+            seqs = load_dataset(root / "segments", "", frame_rate=20, num_joints=23)
+            self.assertEqual(len(seqs), 2)
+            self.assertEqual(seqs[0].rotations.shape[1:], (23, 3, 3))
 
     def test_transition_models_and_filter_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as td:

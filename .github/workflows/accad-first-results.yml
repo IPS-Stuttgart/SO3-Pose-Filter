@@ -42,14 +42,17 @@ jobs:
 
       - name: Build benchmark sequence chunks
         run: |
-          python scripts/prepare_amass_sample.py \
-            --source data/accad_secret_sample/sample.npz \
+          python scripts/prepare_amass_windows.py \
+            --data-root data/accad_secret_sample \
             --output-dir data/accad_first_results_segments \
-            --max-frames 720 \
-            --segment-frames 180 \
-            --stride-frames 120 \
-            --min-segments 3 \
-            --report runs/accad_first_results_segments_report.json
+            --report runs/accad_first_results_segments_report.json \
+            --manifest runs/accad_first_results_segments_manifest.csv \
+            --frame-rate 20 \
+            --segment-frames 60 \
+            --stride-frames 30 \
+            --max-files 1 \
+            --max-segments 6 \
+            --selection top-motion
 
       - name: Run PyRecEst first-results experiment
         run: |
@@ -152,6 +155,7 @@ jobs:
           path: |
             runs/accad_first_results_download_report.json
             runs/accad_first_results_segments_report.json
+            runs/accad_first_results_segments_manifest.csv
             runs/accad_first_results_acceptance.json
             runs/accad_first_results_sweep_config.json
             runs/accad_first_results/gaussian_rw/summary.json
