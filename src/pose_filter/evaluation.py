@@ -13,6 +13,7 @@ import numpy as np
 from .data import PoseSequence
 from .measurements import make_synthetic_measurements, observed_error_deg
 from .particle_filter import run_filter
+from .smoothing import SmootherConfig, run_baseline_smoothers
 from .so3 import geodesic_distance, left_delta, mean_joint_distance_deg
 from .transitions import (
     PersistenceTransition,
@@ -37,6 +38,8 @@ FILTER_SUMMARY_KEYS = [
     "observed_joint_error_deg",
     "filter_error_deg",
     "persistence_error_deg",
+    "smoother_ema_error_deg",
+    "smoother_chordal_error_deg",
     "filter_observed_joint_error_deg",
     "filter_occluded_joint_error_deg",
     "persistence_observed_joint_error_deg",
@@ -215,6 +218,7 @@ def evaluate_filter_sequence_artifacts(
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
     filter_backend: str = "numpy",
+    smoother_config: SmootherConfig | None = None,
 ) -> FilterEvaluationArtifacts:
     measurements = make_synthetic_measurements(
         seq.rotations,
@@ -244,6 +248,9 @@ def evaluate_filter_sequence_artifacts(
         x = persistence.deterministic_next(x)
         persistence_estimates_list.append(x)
     persistence_estimates = np.asarray(persistence_estimates_list)
+    smoother_estimates = run_baseline_smoothers(
+        measurements.observations, measurements.mask, smoother_config
+    )
 
     observed_joint_error = observed_error_deg(
         seq.rotations, measurements.observations, measurements.mask
@@ -286,6 +293,8 @@ def evaluate_filter_sequence_artifacts(
         "mean_ess": float(np.mean(result.effective_sample_size)),
         "resample_count": int(np.sum(result.resampled)),
     }
+    for name, estimates in smoother_estimates.items():
+        metrics[f"{name}_error_deg"] = mean_joint_distance_deg(seq.rotations, estimates)
     for prefix, rotations in [
         ("observed", measurements.observations),
         ("filter", result.estimates),
@@ -327,6 +336,7 @@ def evaluate_filter_sequence(
     confidence_noise_std: float = 0.0,
     min_confidence: float = 0.2,
     filter_backend: str = "numpy",
+    smoother_config: SmootherConfig | None = None,
 ) -> dict:
     return evaluate_filter_sequence_artifacts(
         seq,
@@ -341,6 +351,7 @@ def evaluate_filter_sequence(
         confidence_noise_std=confidence_noise_std,
         min_confidence=min_confidence,
         filter_backend=filter_backend,
+        smoother_config=smoother_config,
     ).metrics
 
 
@@ -357,6 +368,7 @@ def evaluate_filter(
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
     filter_backend: str = "numpy",
+    smoother_config: SmootherConfig | None = None,
 ) -> list[dict]:
     rows = []
     for idx, seq in enumerate(sequences):
@@ -375,6 +387,7 @@ def evaluate_filter(
                 factorized_update=factorized_update,
                 resample_threshold=resample_threshold,
                 filter_backend=filter_backend,
+                smoother_config=smoother_config,
             )
         )
     return rows
@@ -393,6 +406,7 @@ def evaluate_filter_with_artifacts(
     confidence_noise_std: float = 0.0,
     min_confidence: float = 0.2,
     filter_backend: str = "numpy",
+    smoother_config: SmootherConfig | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     metrics = []
     per_joint_rows = []
@@ -412,6 +426,7 @@ def evaluate_filter_with_artifacts(
             confidence_noise_std=confidence_noise_std,
             min_confidence=min_confidence,
             filter_backend=filter_backend,
+            smoother_config=smoother_config,
         )
         metrics.append(artifacts.metrics)
         per_joint_rows.extend(artifacts.per_joint_rows)
@@ -437,6 +452,12 @@ def _mean_row(rows: list[dict]) -> dict:
         "persistence_error_deg": float(
             np.nanmean([r["persistence_error_deg"] for r in rows])
         ),
+        "smoother_ema_error_deg": float(
+            np.nanmean([r["smoother_ema_error_deg"] for r in rows])
+        ),
+        "smoother_chordal_error_deg": float(
+            np.nanmean([r["smoother_chordal_error_deg"] for r in rows])
+        ),
         "mean_ess": float(np.nanmean([r["mean_ess"] for r in rows])),
         "mean_resample_count": float(
             np.nanmean([r["resample_count"] for r in rows])
@@ -461,6 +482,7 @@ def ablation_rows(
     confidence_noise_std: float = 0.0,
     min_confidence: float = 0.2,
     filter_backend: str = "numpy",
+    smoother_config: SmootherConfig | None = None,
 ) -> list[dict]:
     """Run one-axis-at-a-time filter ablations around the configured baseline."""
 
@@ -520,6 +542,7 @@ def ablation_rows(
             confidence_noise_std=confidence_noise_std,
             min_confidence=min_confidence,
             filter_backend=filter_backend,
+            smoother_config=smoother_config,
         )
         rows.append(
             {
@@ -569,6 +592,7 @@ def robustness_rows(
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
     filter_backend: str = "numpy",
+    smoother_config: SmootherConfig | None = None,
 ) -> list[dict]:
     rows = []
     for noise in noise_grid:
@@ -586,6 +610,7 @@ def robustness_rows(
                 factorized_update=factorized_update,
                 resample_threshold=resample_threshold,
                 filter_backend=filter_backend,
+                smoother_config=smoother_config,
             )
             rows.append(
                 {
@@ -606,6 +631,12 @@ def robustness_rows(
                     ),
                     "persistence_error_deg": _nanmean(
                         [r["persistence_error_deg"] for r in result_rows]
+                    ),
+                    "smoother_ema_error_deg": _nanmean(
+                        [r["smoother_ema_error_deg"] for r in result_rows]
+                    ),
+                    "smoother_chordal_error_deg": _nanmean(
+                        [r["smoother_chordal_error_deg"] for r in result_rows]
                     ),
                     "filter_observed_joint_error_deg": _nanmean(
                         [r["filter_observed_joint_error_deg"] for r in result_rows]
@@ -638,6 +669,7 @@ def trajectory_preview_rows(
     factorized_update: bool = True,
     resample_threshold: float = 0.5,
     filter_backend: str = "numpy",
+    smoother_config: SmootherConfig | None = None,
 ) -> list[dict]:
     rng = np.random.default_rng(seed)
     measurements = make_synthetic_measurements(
@@ -661,40 +693,48 @@ def trajectory_preview_rows(
         resample_threshold=resample_threshold,
         backend=filter_backend,
     )
+    smoother_estimates = run_baseline_smoothers(
+        measurements.observations, measurements.mask, smoother_config
+    )
     dist_obs = geodesic_distance(seq.rotations, measurements.observations)
     dist_filter = geodesic_distance(seq.rotations, result.estimates)
+    dist_smoothers = {
+        name: geodesic_distance(seq.rotations, estimates)
+        for name, estimates in smoother_estimates.items()
+    }
     rows = []
     for t in range(seq.rotations.shape[0]):
         observed = dist_obs[t][measurements.mask[t]]
         observed_confidence = measurements.confidence[t][measurements.mask[t]]
         filter_observed = dist_filter[t][measurements.mask[t]]
         filter_occluded = dist_filter[t][~measurements.mask[t]]
-        rows.append(
-            {
-                "frame": t,
-                "observed_error_deg": (
-                    float(np.degrees(np.mean(observed)))
-                    if observed.size
-                    else float("nan")
-                ),
-                "mean_observed_confidence": (
-                    float(np.mean(observed_confidence))
-                    if observed_confidence.size
-                    else float("nan")
-                ),
-                "filter_error_deg": float(np.degrees(np.mean(dist_filter[t]))),
-                "filter_observed_joint_error_deg": (
-                    float(np.degrees(np.mean(filter_observed)))
-                    if filter_observed.size
-                    else float("nan")
-                ),
-                "filter_occluded_joint_error_deg": (
-                    float(np.degrees(np.mean(filter_occluded)))
-                    if filter_occluded.size
-                    else float("nan")
-                ),
-                "observed_joint_fraction": float(np.mean(measurements.mask[t])),
-                "ess": float(result.effective_sample_size[t]),
-            }
-        )
+        row = {
+            "frame": t,
+            "observed_error_deg": (
+                float(np.degrees(np.mean(observed)))
+                if observed.size
+                else float("nan")
+            ),
+            "mean_observed_confidence": (
+                float(np.mean(observed_confidence))
+                if observed_confidence.size
+                else float("nan")
+            ),
+            "filter_error_deg": float(np.degrees(np.mean(dist_filter[t]))),
+            "filter_observed_joint_error_deg": (
+                float(np.degrees(np.mean(filter_observed)))
+                if filter_observed.size
+                else float("nan")
+            ),
+            "filter_occluded_joint_error_deg": (
+                float(np.degrees(np.mean(filter_occluded)))
+                if filter_occluded.size
+                else float("nan")
+            ),
+            "observed_joint_fraction": float(np.mean(measurements.mask[t])),
+            "ess": float(result.effective_sample_size[t]),
+        }
+        for name, dist in dist_smoothers.items():
+            row[f"{name}_error_deg"] = float(np.degrees(np.mean(dist[t])))
+        rows.append(row)
     return rows

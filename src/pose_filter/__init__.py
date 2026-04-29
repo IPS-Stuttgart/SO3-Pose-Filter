@@ -9,6 +9,7 @@ __all__ = [
     "plotting",
     "pyrecest_filter",
     "quaternion",
+    "smoothing",
     "so3",
     "transitions",
 ]

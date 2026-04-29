@@ -19,6 +19,7 @@ from .evaluation import (
     write_json,
 )
 from .plotting import robustness_plot, trajectory_plot
+from .smoothing import SmootherConfig
 from .transitions import build_transition_model
 
 REQUIRED_CONFIG_FIELDS = {
@@ -70,6 +71,10 @@ def run_experiment(config: dict) -> dict:
     factorized_update = bool(config.get("factorized_update", True))
     resample_threshold = float(config.get("resample_threshold", 0.5))
     filter_backend = str(config.get("filter_backend", "numpy"))
+    smoother_config = SmootherConfig(
+        ema_alpha=float(config.get("smoother_ema_alpha", 0.35)),
+        chordal_window=int(config.get("smoother_chordal_window", 5)),
+    )
     noise_deg = float(config["noise_deg"])
     occlusion_prob = float(config["occlusion_prob"])
     num_particles = int(config["num_particles"])
@@ -119,6 +124,7 @@ def run_experiment(config: dict) -> dict:
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
         filter_backend=filter_backend,
+        smoother_config=smoother_config,
     )
     ablations = ablation_rows(
         test,
@@ -157,6 +163,7 @@ def run_experiment(config: dict) -> dict:
         confidence_noise_std=confidence_noise_std,
         min_confidence=min_confidence,
         filter_backend=filter_backend,
+        smoother_config=smoother_config,
     )
     robust_rows = robustness_rows(
         test,
@@ -174,6 +181,7 @@ def run_experiment(config: dict) -> dict:
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
         filter_backend=filter_backend,
+        smoother_config=smoother_config,
     )
     preview_rows = trajectory_preview_rows(
         test[0],
@@ -188,6 +196,7 @@ def run_experiment(config: dict) -> dict:
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
         filter_backend=filter_backend,
+        smoother_config=smoother_config,
     )
 
     write_csv(output_dir / "transition_metrics.csv", transition_rows)
@@ -230,6 +239,10 @@ def run_experiment(config: dict) -> dict:
         "factorized_update": factorized_update,
         "resample_threshold": resample_threshold,
         "filter_backend": filter_backend,
+        "smoothers": {
+            "ema_alpha": smoother_config.ema_alpha,
+            "chordal_window": smoother_config.chordal_window,
+        },
         "transition_metrics": transition_rows,
         "filter_metrics_mean": {
             key: _mean_metric(filter_rows, key) for key in FILTER_SUMMARY_KEYS

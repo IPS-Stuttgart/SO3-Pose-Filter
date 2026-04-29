@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from pyrecest.distributions.cart_prod.hyperhemisphere_cart_prod_dirac_distribution import (
+from pyrecest.distributions.cart_prod.hyperhemisphere_cart_prod_dirac_distribution import (  # type: ignore[import-untyped]
     HyperhemisphereCartProdDiracDistribution,
 )
 

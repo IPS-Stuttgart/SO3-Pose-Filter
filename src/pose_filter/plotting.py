@@ -115,6 +115,14 @@ def trajectory_plot(path: str | Path, rows: list[dict]) -> None:
             (float(r["frame"]), float(r["filter_occluded_joint_error_deg"])) for r in rows
         ],
     }
+    if rows and "smoother_ema_error_deg" in rows[0]:
+        series["ema"] = [
+            (float(r["frame"]), float(r["smoother_ema_error_deg"])) for r in rows
+        ]
+    if rows and "smoother_chordal_error_deg" in rows[0]:
+        series["chordal"] = [
+            (float(r["frame"]), float(r["smoother_chordal_error_deg"])) for r in rows
+        ]
     line_plot_svg(
         path,
         series,

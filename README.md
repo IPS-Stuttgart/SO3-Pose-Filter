@@ -3,12 +3,14 @@
 This workspace contains a small prototype for early AMASS/SMPL motion-filtering results.
 It reads SMPL-style AMASS `.npz` files, converts local body joint axis-angle poses into SO(3) rotation
 matrices, creates synthetic noisy/occluded measurements, and evaluates transition baselines plus a particle
-filter.
+filter. It also reports cheap smoothing baselines so the particle filter is compared against simple temporal
+methods rather than only raw measurements.
 Measurements can carry per-joint confidence scores, so detector outputs with soft joint reliability can
 downweight uncertain observations instead of dropping them with a hard mask only.
 
 The core SO(3) numerics use NumPy, and quaternion product-state distributions use PyRecEst as their
-backend. The package source follows a `src/pose_filter` layout.
+backend. The smoothing baselines also reuse PyRecEst utilities. The package source follows a
+`src/pose_filter` layout.
 
 ## Quick Start
 
@@ -111,6 +113,8 @@ Useful optional fields:
 - `proposal_gain`
 - `confidence_noise_std`
 - `min_confidence`
+- `smoother_ema_alpha`
+- `smoother_chordal_window`
 - `factorized_update`
 - `resample_threshold`
 - `ablation_particle_counts`
@@ -128,6 +132,11 @@ models.
 Synthetic confidence values default to the original binary mask behavior when `confidence_noise_std` is
 zero. Setting `confidence_noise_std > 0` samples observed-joint confidences in `[min_confidence, 1]`; these
 scores scale both the guided proposal correction and the measurement likelihood.
+
+The smoothing baselines are deterministic references:
+
+- `smoother_ema`: causal per-joint exponential smoothing in the tangent space of the previous SO(3) estimate.
+- `smoother_chordal`: offline centered-window chordal mean over visible observations.
 
 The experiment outputs include research-oriented diagnostics beyond aggregate pose error:
 observed-vs-occluded joint errors, per-joint errors, and temporal acceleration/jerk metrics for the raw

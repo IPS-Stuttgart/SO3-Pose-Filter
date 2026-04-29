@@ -9,7 +9,7 @@ description = "Prototype for recursive Bayesian filtering of human pose trajecto
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Florian Pfaff" }]
-dependencies = ["numpy>=1.24", "pyrecest"]
+dependencies = ["numpy>=1.24", "pyrecest>=1.1.1"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

@@ -9,6 +9,7 @@ from _path import SRC  # noqa: F401
 from pose_filter.data import load_dataset, split_sequences
 from pose_filter.evaluation import (
     ablation_rows,
+    evaluate_filter_sequence,
     evaluate_filter_sequence_artifacts,
     temporal_metrics,
 )
@@ -103,6 +104,25 @@ class PipelineTests(unittest.TestCase):
                 )
             )
             self.assertTrue(any(row["ablation"] == "factorized_update" for row in rows))
+
+    def test_filter_evaluation_reports_smoother_baselines(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_toy(root / "seq.npz")
+            seqs = load_dataset(root, "", frame_rate=20, num_joints=23)
+            rng = np.random.default_rng(12)
+
+            row = evaluate_filter_sequence(
+                seqs[0],
+                PersistenceTransition(),
+                noise_deg=8.0,
+                occlusion_prob=0.2,
+                num_particles=16,
+                rng=rng,
+            )
+
+            self.assertIn("smoother_ema_error_deg", row)
+            self.assertIn("smoother_chordal_error_deg", row)
 
     def test_evaluation_reports_research_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -21,6 +21,8 @@
   "proposal_gain": 0.2,
   "confidence_noise_std": 0.15,
   "min_confidence": 0.35,
+  "smoother_ema_alpha": 0.35,
+  "smoother_chordal_window": 5,
   "factorized_update": true,
   "resample_threshold": 0.5,
   "ablation_particle_counts": [64, 128, 256],
