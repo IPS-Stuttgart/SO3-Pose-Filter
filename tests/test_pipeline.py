@@ -13,8 +13,10 @@ from pose_filter.evaluation import (
     evaluate_filter_sequence_artifacts,
     temporal_metrics,
 )
-from pose_filter.measurements import make_synthetic_measurements
-from pose_filter.particle_filter import run_particle_filter
+from pose_filter.measurements import log_likelihood, make_synthetic_measurements
+from pose_filter.particle_filter import run_filter, run_particle_filter
+from pose_filter.pyrecest_filter import is_pyrecest_filter_available
+from pose_filter.so3 import axis_angle_to_matrix
 from pose_filter.transitions import (
     GaussianRandomWalkTransition,
     LearnedDeltaTransition,
@@ -54,7 +56,17 @@ class PipelineTests(unittest.TestCase):
                 LearnedDeltaTransition.fit(train),
             ]
             rng = np.random.default_rng(9)
-            meas = make_synthetic_measurements(test[0].rotations, 10.0, 0.2, rng)
+            meas = make_synthetic_measurements(
+                test[0].rotations,
+                10.0,
+                0.2,
+                rng,
+                confidence_noise_std=0.15,
+                min_confidence=0.4,
+            )
+            self.assertEqual(meas.confidence.shape, meas.mask.shape)
+            self.assertTrue(np.all(meas.confidence[~meas.mask] == 0.0))
+            self.assertTrue(np.all(meas.confidence[meas.mask] >= 0.4))
             for model in models:
                 pred = model.sample_next(test[0].rotations[0], rng, n_samples=3)
                 self.assertEqual(pred.shape, (3, 23, 3, 3))
@@ -65,6 +77,7 @@ class PipelineTests(unittest.TestCase):
                     meas.noise_sigma_rad,
                     num_particles=16,
                     rng=rng,
+                    confidence=meas.confidence,
                     factorized_update=False,
                     resample_threshold=0.75,
                 )
@@ -140,6 +153,33 @@ class PipelineTests(unittest.TestCase):
                 {"truth", "observed", "filter", "persistence"},
             )
 
+    def test_pyrecest_filter_backend_smoke(self) -> None:
+        if not is_pyrecest_filter_available():
+            self.skipTest("PyRecEst SO3ProductParticleFilter is not available")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_toy(root / "seq.npz", frames=45)
+            seq = load_dataset(root, "", frame_rate=20, num_joints=23)[0]
+
+            rng = np.random.default_rng(23)
+            meas = make_synthetic_measurements(seq.rotations, 8.0, 0.25, rng)
+            result = run_filter(
+                meas.observations,
+                meas.mask,
+                PersistenceTransition(),
+                meas.noise_sigma_rad,
+                num_particles=12,
+                rng=rng,
+                factorized_update=False,
+                resample_threshold=0.75,
+                backend="pyrecest",
+            )
+
+            self.assertEqual(result.estimates.shape, seq.rotations.shape)
+            self.assertTrue(bool(np.all(np.isfinite(result.effective_sample_size))))
+            self.assertTrue(bool(np.all(result.effective_sample_size > 0.0)))
+
     def test_temporal_metrics_are_zero_for_constant_pose(self) -> None:
         rotations = np.broadcast_to(np.eye(3), (5, 23, 3, 3)).copy()
 
@@ -149,6 +189,52 @@ class PipelineTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["jerk_deg"], 0.0)
         self.assertAlmostEqual(metrics["acceleration_error_deg"], 0.0)
         self.assertAlmostEqual(metrics["jerk_error_deg"], 0.0)
+
+    def test_confidence_downweights_measurement_likelihood(self) -> None:
+        state = axis_angle_to_matrix(np.zeros((1, 3)))
+        observation = axis_angle_to_matrix(np.array([[0.0, 0.0, 1.0]]))
+        mask = np.array([True])
+
+        high_confidence = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            confidence=np.array([1.0]),
+        )
+        low_confidence = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            confidence=np.array([0.1]),
+        )
+        zero_confidence = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            confidence=np.array([0.0]),
+        )
+
+        self.assertGreater(float(low_confidence), float(high_confidence))
+        self.assertAlmostEqual(float(zero_confidence), 0.0)
+
+        small_sigma = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            joint_noise_sigma_rad=np.array([0.1]),
+        )
+        large_sigma = log_likelihood(
+            observation,
+            state,
+            mask,
+            np.radians(10.0),
+            joint_noise_sigma_rad=np.array([1.0]),
+        )
+        self.assertGreater(float(large_sigma), float(small_sigma))
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ It reads SMPL-style AMASS `.npz` files, converts local body joint axis-angle pos
 matrices, creates synthetic noisy/occluded measurements, and evaluates transition baselines plus a particle
 filter. It also reports cheap smoothing baselines so the particle filter is compared against simple temporal
 methods rather than only raw measurements.
+Measurements can carry per-joint confidence scores, so detector outputs with soft joint reliability can
+downweight uncertain observations instead of dropping them with a hard mask only.
 
 The core SO(3) numerics use NumPy, and quaternion product-state distributions use PyRecEst as their
 backend. The smoothing baselines also reuse PyRecEst utilities. The package source follows a
@@ -63,25 +65,24 @@ global translation, hands, and face.
 Copy `configs/amass_small.example.json` to a local config and replace `data_root` with the real AMASS
 directory. Keep generated real-data outputs under `runs/`; they are ignored by git.
 
-## Quaternion PyRecEst Backend
+## PyRecEst Backend
 
-The filter internals use rotation matrices, while `pose_filter.quaternion` uses PyRecEst
-`HyperhemisphereCartProdDiracDistribution` objects as the backend for scalar-last unit quaternion
-states `(x, y, z, w)` on the upper hyperhemisphere `S^3_+`:
+The default experiment path uses the NumPy SO(3)^K particle filter. Set `"filter_backend": "pyrecest"`
+in an experiment config to store particles in PyRecEst's `SO3ProductParticleFilter` while keeping the
+same transition models, synthetic measurements, and output metrics. This backend uses scalar-last unit
+quaternion states `(x, y, z, w)` on the upper hyperhemisphere `S^3_+` and converts back to rotation
+matrices for evaluation:
 
 ```python
-from pose_filter.quaternion import rotations_to_pyrecest_hyperhemisphere_dirac
 from pose_filter.quaternion import rotations_to_quaternions
+from pose_filter.pyrecest_filter import run_pyrecest_particle_filter
 
 quaternions = rotations_to_quaternions(rotations)  # [N, 23, 4], w >= 0
-distribution = rotations_to_pyrecest_hyperhemisphere_dirac(
-    rotations,
-    weights=particle_weights,
-)
+result = run_pyrecest_particle_filter(observations, mask, model, noise_sigma, 128, rng)
 ```
 
-PyRecEst is a runtime dependency because these quaternion product-state distributions are part of the
-package backend rather than an optional adapter.
+PyRecEst is a runtime dependency because the quaternion product-state distributions and the optional
+PyRecEst particle filter backend are part of the package backend rather than an external script.
 
 ## Config Fields
 
@@ -108,7 +109,10 @@ Useful optional fields:
 - `robustness_noise_deg`
 - `robustness_occlusion_prob`
 - `process_noise_deg`
+- `filter_backend`: `numpy` or `pyrecest`
 - `proposal_gain`
+- `confidence_noise_std`
+- `min_confidence`
 - `smoother_ema_alpha`
 - `smoother_chordal_window`
 - `factorized_update`
@@ -124,6 +128,10 @@ Useful optional fields:
 from the current pose and estimates residual noise for sampling. This keeps the first prototype runnable
 without PyTorch while preserving the `sample_next` / `log_prob_next` interface expected by later neural
 models.
+
+Synthetic confidence values default to the original binary mask behavior when `confidence_noise_std` is
+zero. Setting `confidence_noise_std > 0` samples observed-joint confidences in `[min_confidence, 1]`; these
+scores scale both the guided proposal correction and the measurement likelihood.
 
 The smoothing baselines are deterministic references:
 
