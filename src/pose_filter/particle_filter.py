@@ -138,10 +138,14 @@ def run_particle_filter(
     estimates = []
     ess_values = []
     resampled_flags = []
+    particle_history: list[np.ndarray] = []
+    history_keep = int(getattr(transition_model, "history_length", 0)) + 1
 
     for t in range(t_steps):
         if t > 0:
-            particles = transition_model.sample_next(particles, rng)
+            particles = transition_model.sample_next_from_history(
+                particle_history or [particles], rng
+            )
 
         if proposal_gain > 0.0:
             delta_to_observation = left_delta(particles, observations[t])
@@ -183,6 +187,7 @@ def run_particle_filter(
         if should_resample and t < t_steps - 1:
             idx = systematic_resample(weights, rng)
             particles = particles[idx]
+            particle_history = [entry[idx] for entry in particle_history]
             log_weights = np.full(
                 num_particles, -np.log(num_particles), dtype=np.float64
             )
@@ -191,6 +196,10 @@ def run_particle_filter(
                 -np.log(num_particles),
                 dtype=np.float64,
             )
+
+        if t < t_steps - 1:
+            particle_history.append(particles.copy())
+            particle_history = particle_history[-history_keep:]
 
     return ParticleFilterResult(
         estimates=np.asarray(estimates),
