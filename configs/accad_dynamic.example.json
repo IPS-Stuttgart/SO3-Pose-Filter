@@ -27,5 +27,13 @@
   "ablation_particle_counts": [64, 128],
   "ablation_proposal_gains": [0.0, 0.2],
   "ablation_factorized_updates": [false, true],
-  "ablation_resample_thresholds": [0.5]
+  "ablation_resample_thresholds": [0.5],
+  "gru_transition_checkpoint": "runs/accad_dynamic_sweep/gru_delta_checkpoint.npz",
+  "gru_history_length": 8,
+  "gru_hidden_dim": 128,
+  "gru_num_layers": 1,
+  "gru_epochs": 100,
+  "gru_learning_rate": 0.001,
+  "gru_weight_decay": 0.0001,
+  "gru_device": "auto"
 }

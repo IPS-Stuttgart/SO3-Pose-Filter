@@ -2,13 +2,65 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from .data import PoseSequence, sequence_pairs
 from .so3 import geodesic_distance, left_apply_delta, left_delta, log_map
+
+
+def _require_torch() -> Any:
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError(
+            "gru_delta requires PyTorch. Install the optional torch extra, for example `python -m pip install -e .[torch]`."
+        ) from exc
+    return torch
+
+
+def is_torch_available() -> bool:
+    try:
+        _require_torch()
+    except ImportError:
+        return False
+    return True
+
+
+def _resolve_torch_device(torch: Any, device: str) -> Any:
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("gru_delta requested CUDA, but torch.cuda.is_available() is false")
+    return torch.device(device)
+
+
+def _make_gru_delta_module(
+    torch: Any,
+    input_dim: int,
+    hidden_dim: int,
+    output_dim: int,
+    num_layers: int,
+) -> Any:
+    class _GRUDeltaModule(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gru = torch.nn.GRU(
+                input_size=input_dim,
+                hidden_size=hidden_dim,
+                num_layers=num_layers,
+                batch_first=True,
+            )
+            self.output = torch.nn.Linear(hidden_dim, output_dim)
+
+        def forward(self, x: Any) -> Any:
+            hidden, _ = self.gru(x)
+            return self.output(hidden)
+
+    return _GRUDeltaModule()
 
 
 class TransitionModel:
@@ -628,6 +680,272 @@ class HistoryMLPDeltaTransition(TransitionModel):
             )
 
 
+@dataclass
+class GRUDeltaTransition(TransitionModel):
+    input_mean: np.ndarray
+    input_std: np.ndarray
+    target_mean: np.ndarray
+    target_std: np.ndarray
+    residual_std: np.ndarray
+    state_dict: dict[str, np.ndarray]
+    history_steps: int
+    hidden_dim: int
+    num_layers: int
+    epochs: int
+    learning_rate: float
+    weight_decay: float
+    seed: int
+    device: str = "cpu"
+    _module: Any | None = field(default=None, init=False, repr=False)
+
+    name = "gru_delta"
+
+    @property
+    def history_length(self) -> int:
+        return self.history_steps
+
+    @classmethod
+    def fit(
+        cls,
+        sequences: list[PoseSequence],
+        history_length: int = 8,
+        hidden_dim: int = 128,
+        num_layers: int = 1,
+        epochs: int = 50,
+        learning_rate: float = 1e-3,
+        weight_decay: float = 1e-4,
+        seed: int = 0,
+        device: str = "auto",
+        min_std_rad: float = np.radians(0.25),
+        max_std_rad: float | None = None,
+    ) -> "GRUDeltaTransition":
+        torch = _require_torch()
+        torch.manual_seed(int(seed))
+        torch_device = _resolve_torch_device(torch, device)
+        feature_sequences, target_sequences, num_joints = cls._training_sequences(sequences)
+        features = np.concatenate(feature_sequences, axis=0)
+        targets = np.concatenate(target_sequences, axis=0)
+        input_mean = np.mean(features, axis=0)
+        input_std = np.maximum(np.std(features, axis=0), 1e-6)
+        target_mean = np.mean(targets, axis=0)
+        target_std = np.maximum(np.std(targets, axis=0), min_std_rad)
+
+        x_sequences = [(seq - input_mean) / input_std for seq in feature_sequences]
+        y_sequences = [(seq - target_mean) / target_std for seq in target_sequences]
+        model = _make_gru_delta_module(
+            torch,
+            input_dim=features.shape[1],
+            hidden_dim=int(hidden_dim),
+            output_dim=targets.shape[1],
+            num_layers=int(num_layers),
+        ).to(torch_device)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=float(learning_rate),
+            weight_decay=float(weight_decay),
+        )
+        rng = np.random.default_rng(seed)
+        model.train()
+        for _ in range(max(1, int(epochs))):
+            for idx in rng.permutation(len(x_sequences)):
+                xb = torch.as_tensor(
+                    x_sequences[int(idx)][None, ...],
+                    dtype=torch.float32,
+                    device=torch_device,
+                )
+                yb = torch.as_tensor(
+                    y_sequences[int(idx)][None, ...],
+                    dtype=torch.float32,
+                    device=torch_device,
+                )
+                optimizer.zero_grad(set_to_none=True)
+                loss = torch.mean((model(xb) - yb) ** 2)
+                loss.backward()
+                optimizer.step()
+
+        predictions = []
+        model.eval()
+        with torch.no_grad():
+            for x_seq in x_sequences:
+                xb = torch.as_tensor(
+                    x_seq[None, ...],
+                    dtype=torch.float32,
+                    device=torch_device,
+                )
+                pred = model(xb)[0].detach().cpu().numpy()
+                predictions.append(pred * target_std + target_mean)
+        residual = targets - np.concatenate(predictions, axis=0)
+        residual_std = np.maximum(
+            np.std(residual, axis=0).reshape(num_joints, 3), min_std_rad
+        )
+        if max_std_rad is not None:
+            residual_std = np.minimum(residual_std, float(max_std_rad))
+
+        state_dict = {
+            key: value.detach().cpu().numpy()
+            for key, value in model.state_dict().items()
+        }
+        resolved_device = str(torch_device)
+        result = cls(
+            input_mean=input_mean,
+            input_std=input_std,
+            target_mean=target_mean,
+            target_std=target_std,
+            residual_std=residual_std,
+            state_dict=state_dict,
+            history_steps=max(1, int(history_length)),
+            hidden_dim=int(hidden_dim),
+            num_layers=int(num_layers),
+            epochs=int(epochs),
+            learning_rate=float(learning_rate),
+            weight_decay=float(weight_decay),
+            seed=int(seed),
+            device=resolved_device,
+        )
+        result._module = model
+        return result
+
+    @staticmethod
+    def _training_sequences(
+        sequences: list[PoseSequence],
+    ) -> tuple[list[np.ndarray], list[np.ndarray], int]:
+        features = []
+        targets = []
+        num_joints = sequences[0].rotations.shape[1]
+        for seq in sequences:
+            rotations = np.asarray(seq.rotations, dtype=np.float64)
+            if rotations.shape[0] < 2:
+                continue
+            features.append(log_map(rotations[:-1]).reshape(rotations.shape[0] - 1, -1))
+            targets.append(left_delta(rotations[:-1], rotations[1:]).reshape(rotations.shape[0] - 1, -1))
+        if not features:
+            raise ValueError("need at least one sequence with two frames")
+        return features, targets, num_joints
+
+    def _model(self) -> tuple[Any, Any, Any]:
+        torch = _require_torch()
+        torch_device = _resolve_torch_device(torch, self.device)
+        if self._module is None:
+            module = _make_gru_delta_module(
+                torch,
+                input_dim=int(self.input_mean.shape[0]),
+                hidden_dim=int(self.hidden_dim),
+                output_dim=int(self.target_mean.shape[0]),
+                num_layers=int(self.num_layers),
+            ).to(torch_device)
+            module.load_state_dict(
+                {
+                    key: torch.as_tensor(value, dtype=torch.float32, device=torch_device)
+                    for key, value in self.state_dict.items()
+                }
+            )
+            module.eval()
+            self._module = module
+        return self._module, torch, torch_device
+
+    def _features_from_history(self, history: list[np.ndarray]) -> np.ndarray:
+        history = history[-(self.history_length + 1) :]
+        current = np.asarray(history[-1], dtype=np.float64)
+        num_joints = current.shape[-3]
+        return np.stack(
+            [log_map(np.asarray(entry, dtype=np.float64)).reshape(-1, num_joints * 3) for entry in history],
+            axis=1,
+        )
+
+    def _mean_delta_from_history(self, history: list[np.ndarray]) -> np.ndarray:
+        current = np.asarray(history[-1], dtype=np.float64)
+        features = self._features_from_history(history)
+        standardized = (features - self.input_mean) / self.input_std
+        module, torch, torch_device = self._model()
+        with torch.no_grad():
+            xb = torch.as_tensor(standardized, dtype=torch.float32, device=torch_device)
+            pred = module(xb)[:, -1, :].detach().cpu().numpy()
+        delta = pred * self.target_std + self.target_mean
+        return delta.reshape(current.shape[:-2] + (3,))
+
+    def sample_next(
+        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
+    ) -> np.ndarray:
+        if n_samples is not None:
+            base = np.repeat(np.asarray(x_k, dtype=np.float64)[None, ...], n_samples, axis=0)
+            return self.sample_next_from_history([base], rng)
+        return self.sample_next_from_history([np.asarray(x_k, dtype=np.float64)], rng)
+
+    def sample_next_from_history(
+        self, history: list[np.ndarray], rng: np.random.Generator
+    ) -> np.ndarray:
+        mean = self._mean_delta_from_history(history)
+        noise = rng.normal(0.0, self.residual_std, size=mean.shape)
+        return left_apply_delta(mean + noise, history[-1])
+
+    def deterministic_next(self, x_k: np.ndarray) -> np.ndarray:
+        return self.deterministic_next_from_history([np.asarray(x_k, dtype=np.float64)])
+
+    def deterministic_next_from_history(self, history: list[np.ndarray]) -> np.ndarray:
+        return left_apply_delta(self._mean_delta_from_history(history), history[-1])
+
+    def log_prob_next(self, x_next: np.ndarray, x_k: np.ndarray) -> np.ndarray:
+        return self.log_prob_next_from_history(x_next, [x_k])
+
+    def log_prob_next_from_history(
+        self, x_next: np.ndarray, history: list[np.ndarray]
+    ) -> np.ndarray:
+        delta = left_delta(history[-1], x_next)
+        mean = self._mean_delta_from_history(history)
+        z = (delta - mean) / self.residual_std
+        return -0.5 * np.sum(
+            z * z + np.log(2.0 * np.pi * self.residual_std * self.residual_std),
+            axis=(-1, -2),
+        )
+
+    def save_npz(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, np.ndarray] = {
+            "input_mean": self.input_mean,
+            "input_std": self.input_std,
+            "target_mean": self.target_mean,
+            "target_std": self.target_std,
+            "residual_std": self.residual_std,
+            "history_length": np.asarray(self.history_length),
+            "hidden_dim": np.asarray(self.hidden_dim),
+            "num_layers": np.asarray(self.num_layers),
+            "epochs": np.asarray(self.epochs),
+            "learning_rate": np.asarray(self.learning_rate),
+            "weight_decay": np.asarray(self.weight_decay),
+            "seed": np.asarray(self.seed),
+            "device": np.asarray(self.device),
+            "state_keys": np.asarray(list(self.state_dict), dtype="<U128"),
+        }
+        for idx, key in enumerate(self.state_dict):
+            payload[f"state_{idx}"] = self.state_dict[key]
+        np.savez(path, **payload)  # type: ignore[arg-type]
+
+    @classmethod
+    def load_npz(cls, path: str | Path) -> "GRUDeltaTransition":
+        with np.load(Path(path), allow_pickle=False) as data:
+            keys = [str(key) for key in np.asarray(data["state_keys"]).tolist()]
+            return cls(
+                input_mean=np.asarray(data["input_mean"], dtype=np.float64),
+                input_std=np.asarray(data["input_std"], dtype=np.float64),
+                target_mean=np.asarray(data["target_mean"], dtype=np.float64),
+                target_std=np.asarray(data["target_std"], dtype=np.float64),
+                residual_std=np.asarray(data["residual_std"], dtype=np.float64),
+                state_dict={
+                    key: np.asarray(data[f"state_{idx}"], dtype=np.float32)
+                    for idx, key in enumerate(keys)
+                },
+                history_steps=int(np.asarray(data["history_length"]).reshape(-1)[0]),
+                hidden_dim=int(np.asarray(data["hidden_dim"]).reshape(-1)[0]),
+                num_layers=int(np.asarray(data["num_layers"]).reshape(-1)[0]),
+                epochs=int(np.asarray(data["epochs"]).reshape(-1)[0]),
+                learning_rate=float(np.asarray(data["learning_rate"]).reshape(-1)[0]),
+                weight_decay=float(np.asarray(data["weight_decay"]).reshape(-1)[0]),
+                seed=int(np.asarray(data["seed"]).reshape(-1)[0]),
+                device=str(np.asarray(data["device"]).reshape(-1)[0]),
+            )
+
+
 def build_transition_model(
     name: str,
     train_sequences: list[PoseSequence],
@@ -688,6 +1006,29 @@ def build_transition_model(
         if checkpoint and bool(config.get("transition_save_checkpoint", True)):
             history_model.save_npz(Path(checkpoint))
         return history_model
+    if name == "gru_delta":
+        checkpoint = config.get(
+            "gru_transition_checkpoint", config.get("transition_checkpoint")
+        )
+        if checkpoint and bool(config.get("transition_load_checkpoint", False)):
+            checkpoint_path = Path(checkpoint)
+            if checkpoint_path.exists():
+                return GRUDeltaTransition.load_npz(checkpoint_path)
+        gru_model = GRUDeltaTransition.fit(
+            train_sequences,
+            history_length=int(config.get("gru_history_length", config.get("history_length", 8))),
+            hidden_dim=int(config.get("gru_hidden_dim", 128)),
+            num_layers=int(config.get("gru_num_layers", 1)),
+            epochs=int(config.get("gru_epochs", 50)),
+            learning_rate=float(config.get("gru_learning_rate", 1e-3)),
+            weight_decay=float(config.get("gru_weight_decay", 1e-4)),
+            seed=int(config.get("seed", 0)),
+            device=str(config.get("gru_device", "auto")),
+            max_std_rad=max_std_rad,
+        )
+        if checkpoint and bool(config.get("transition_save_checkpoint", True)):
+            gru_model.save_npz(Path(checkpoint))
+        return gru_model
     raise ValueError(f"unknown transition_model: {name}")
 
 
