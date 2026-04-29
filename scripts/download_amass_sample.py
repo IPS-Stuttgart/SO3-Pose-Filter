@@ -15,6 +15,13 @@ from pathlib import Path
 import numpy as np
 
 
+def _require_http_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"expected an HTTP(S) URL, got scheme {parsed.scheme!r}")
+    return url
+
+
 def is_amass_npz(path: Path) -> tuple[bool, dict]:
     try:
         with np.load(path, allow_pickle=False) as data:
@@ -47,11 +54,12 @@ def is_amass_npz(path: Path) -> tuple[bool, dict]:
 
 def public_share_filename(url: str) -> str | None:
     try:
+        url = _require_http_url(url)
         request = urllib.request.Request(
             url,
             headers={"User-Agent": "SO3-Pose-Filter-CI/1.0"},
         )
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310
             page = response.read(2_000_000).decode("utf-8", "replace")
     except Exception:
         return None
@@ -102,6 +110,7 @@ def candidate_urls(url: str) -> list[str]:
 
 
 def download(url: str, destination: Path) -> None:
+    url = _require_http_url(url)
     request = urllib.request.Request(
         url,
         headers={
@@ -109,7 +118,7 @@ def download(url: str, destination: Path) -> None:
             "Accept": "application/octet-stream,*/*",
         },
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
+    with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310
         with destination.open("wb") as handle:
             shutil.copyfileobj(response, handle)
 
