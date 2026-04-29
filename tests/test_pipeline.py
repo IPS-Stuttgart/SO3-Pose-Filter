@@ -26,6 +26,7 @@ from pose_filter.transitions import (
 )
 from run_first_results_benchmark import run_first_results_benchmark
 from prepare_amass_windows import prepare_windows
+from run_private_accad_eval import run_private_accad_eval
 
 
 def _write_toy(path: Path, frames: int = 45, fps: float = 60.0) -> None:
@@ -121,6 +122,70 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue(
                 (output_dir / "plots" / "filter_vs_baselines.svg").exists()
             )
+
+    def test_private_accad_eval_smoke_uses_ignored_output_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw_dir = root / "raw"
+            raw_dir.mkdir()
+            for idx in range(4):
+                _write_toy(raw_dir / f"seq_{idx}.npz", frames=90 + idx * 3)
+
+            output_dir = root / "private_eval"
+            summary = run_private_accad_eval(
+                {
+                    "source_data_root": str(raw_dir),
+                    "output_dir": str(output_dir),
+                    "frame_rate": 20,
+                    "num_joints": 23,
+                    "segment_frames": 12,
+                    "stride_frames": 6,
+                    "max_segments": 4,
+                    "selection": "top-motion",
+                    "max_per_file": 2,
+                    "noise_deg": 5.0,
+                    "occlusion_prob": 0.25,
+                    "num_particles": 8,
+                    "benchmark_num_particles": [8],
+                    "benchmark_seeds": [3],
+                    "benchmark_methods": [
+                        "raw",
+                        "persistence",
+                        "gaussian_rw",
+                        "mlp_delta",
+                        "history_mlp_delta",
+                    ],
+                    "benchmark_noise_deg": [5.0],
+                    "benchmark_occlusion_prob": [0.0, 0.25],
+                    "transition_model": "gaussian_rw",
+                    "max_sequences": 4,
+                    "min_frames": 8,
+                    "train_fraction": 0.5,
+                    "val_fraction": 0.25,
+                    "rollout_horizon": 5,
+                    "process_noise_deg": 3.0,
+                    "transition_save_checkpoint": True,
+                    "mlp_hidden_dim": 8,
+                    "mlp_epochs": 2,
+                    "mlp_batch_size": 16,
+                    "history_length": 2,
+                    "history_mlp_hidden_dim": 8,
+                    "history_mlp_epochs": 2,
+                    "history_mlp_batch_size": 16,
+                    "proposal_gain": 0.2,
+                    "factorized_update": True,
+                    "resample_threshold": 0.5,
+                }
+            )
+
+            self.assertEqual(summary["window_report"]["selected_count"], 4)
+            self.assertEqual(summary["methods"][-1], "history_mlp_delta")
+            self.assertEqual(summary["runs"][0]["num_particles"], 8)
+            self.assertTrue((output_dir / "aggregate_benchmark_metrics.csv").exists())
+            self.assertTrue((output_dir / "aggregate_transition_metrics.csv").exists())
+            self.assertTrue((output_dir / "aggregate_method_means.csv").exists())
+            self.assertTrue((output_dir / "private_accad_eval_summary.json").exists())
+            self.assertTrue((output_dir / "private_accad_eval_summary.md").exists())
 
     def test_transition_models_and_filter_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as td:
