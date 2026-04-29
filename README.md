@@ -52,6 +52,12 @@ The sweep writes:
 - `runs/sweep/comparison_summary.json`
 - one full experiment folder per transition model
 
+Limit a sweep to selected transition models:
+
+```powershell
+python scripts\run_model_sweep.py --config configs\example.json --output runs\sweep --models persistence gaussian_rw
+```
+
 ## Real AMASS Data
 
 Point `data_root` in a config JSON file at an AMASS/SMPL-style directory containing `.npz` files with:
@@ -64,6 +70,12 @@ global translation, hands, and face.
 
 Copy `configs/amass_small.example.json` to a local config and replace `data_root` with the real AMASS
 directory. Keep generated real-data outputs under `runs/`; they are ignored by git.
+
+The ACCAD first-results benchmark workflow uses `configs/accad_first_results.example.json`. It downloads
+the `AMASS_ACCAD_SAMPLE` secret, chunks the motion file into train/validation/test sequence windows, runs
+the PyRecEst-backed Gaussian random-walk filter, runs a compact transition-model sweep, and uploads CSV,
+JSON, and SVG artifacts. The workflow asserts that the filter beats raw synthetic observations and the
+persistence rollout baseline under the configured moderate noise/occlusion setting.
 
 ## PyRecEst Backend
 

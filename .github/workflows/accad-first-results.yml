@@ -1,0 +1,161 @@
+name: ACCAD First Results Benchmark
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  accad-first-results:
+    name: PyRecEst-backed ACCAD benchmark
+    runs-on: ubuntu-latest
+    env:
+      SAMPLE_URL: ${{ secrets.AMASS_ACCAD_SAMPLE }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install package and PyRecEst main
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install --upgrade "git+https://github.com/FlorianPfaff/PyRecEst.git@main"
+
+      - name: Download ACCAD AMASS sample
+        run: |
+          python scripts/download_amass_sample.py \
+            --url "$SAMPLE_URL" \
+            --output data/accad_secret_sample/sample.npz \
+            --report runs/accad_first_results_download_report.json
+
+      - name: Build benchmark sequence chunks
+        run: |
+          python scripts/prepare_amass_sample.py \
+            --source data/accad_secret_sample/sample.npz \
+            --output-dir data/accad_first_results_segments \
+            --max-frames 720 \
+            --segment-frames 180 \
+            --stride-frames 120 \
+            --min-segments 3 \
+            --report runs/accad_first_results_segments_report.json
+
+      - name: Run PyRecEst first-results experiment
+        run: |
+          python scripts/run_experiment.py --config configs/accad_first_results.example.json
+
+      - name: Build compact transition sweep config
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(
+              Path("configs/accad_first_results.example.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          config.update(
+              {
+                  "output_dir": "runs/accad_first_results_sweep/base",
+                  "sweep_output_dir": "runs/accad_first_results_sweep",
+                  "robustness_noise_deg": [config["noise_deg"]],
+                  "robustness_occlusion_prob": [config["occlusion_prob"]],
+                  "ablation_particle_counts": [config["num_particles"]],
+                  "ablation_proposal_gains": [config["proposal_gain"]],
+                  "ablation_factorized_updates": [config["factorized_update"]],
+                  "ablation_resample_thresholds": [config["resample_threshold"]],
+              }
+          )
+          Path("runs/accad_first_results_sweep_config.json").write_text(
+              json.dumps(config, indent=2),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run transition model sweep
+        run: |
+          python scripts/run_model_sweep.py \
+            --config runs/accad_first_results_sweep_config.json \
+            --output runs/accad_first_results_sweep \
+            --models persistence gaussian_rw learned_delta
+
+      - name: Validate first-result acceptance criteria
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          summary_path = Path("runs/accad_first_results/gaussian_rw/summary.json")
+          sweep_path = Path("runs/accad_first_results_sweep/comparison_metrics.csv")
+          robustness_path = Path("runs/accad_first_results/gaussian_rw/robustness_metrics.csv")
+
+          assert summary_path.exists(), "missing first-results summary"
+          assert sweep_path.exists(), "missing transition sweep metrics"
+          assert robustness_path.exists(), "missing robustness metrics"
+
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          means = summary["filter_metrics_mean"]
+          assert summary["filter_backend"] == "pyrecest"
+          assert summary["transition_model"] == "gaussian_rw"
+          assert means["filter_error_deg"] < means["observed_error_deg"]
+
+          with sweep_path.open(newline="", encoding="utf-8") as handle:
+              sweep_rows = list(csv.DictReader(handle))
+          models = {row["model"] for row in sweep_rows}
+          assert models == {"persistence", "gaussian_rw", "learned_delta"}
+          gaussian_row = next(row for row in sweep_rows if row["model"] == "gaussian_rw")
+          assert float(gaussian_row["filter_error_deg"]) < float(
+              gaussian_row["observed_error_deg"]
+          )
+
+          with robustness_path.open(newline="", encoding="utf-8") as handle:
+              robustness_rows = list(csv.DictReader(handle))
+          assert len(robustness_rows) >= 9
+
+          acceptance = {
+              "primary_filter_metrics_mean": means,
+              "transition_sweep": sweep_rows,
+              "robustness_points": len(robustness_rows),
+              "criteria": {
+                  "pyrecest_backend_used": True,
+                  "filter_beats_raw_observations": True,
+                  "persistence_baseline_reported": True,
+                  "filter_beats_persistence_baseline": (
+                      means["filter_error_deg"] < means["persistence_error_deg"]
+                  ),
+              },
+          }
+          Path("runs/accad_first_results_acceptance.json").write_text(
+              json.dumps(acceptance, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps(acceptance, indent=2))
+          PY
+
+      - name: Upload first-results artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: accad-first-results-benchmark
+          path: |
+            runs/accad_first_results_download_report.json
+            runs/accad_first_results_segments_report.json
+            runs/accad_first_results_acceptance.json
+            runs/accad_first_results_sweep_config.json
+            runs/accad_first_results/gaussian_rw/summary.json
+            runs/accad_first_results/gaussian_rw/*.csv
+            runs/accad_first_results/gaussian_rw/plots/*.svg
+            runs/accad_first_results_sweep/comparison_metrics.csv
+            runs/accad_first_results_sweep/comparison_summary.json
