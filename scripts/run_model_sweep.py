@@ -83,11 +83,18 @@ def main() -> None:
         default=None,
         help="Sweep output directory. Defaults to config.sweep_output_dir or runs/sweep.",
     )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=MODELS,
+        default=list(MODELS),
+        help="Transition models to evaluate.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
     output = Path(args.output or config.get("sweep_output_dir", "runs/sweep"))
-    payload = run_sweep(config, output)
+    payload = run_sweep(config, output, models=tuple(args.models))
     print(json.dumps(payload, indent=2))
 
 
