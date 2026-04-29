@@ -142,6 +142,32 @@ python scripts\run_first_results_benchmark.py `
   --occlusion-prob 0.25
 ```
 
+For a reproducible private ACCAD evaluation that keeps all generated results out of git, use the orchestration
+runner:
+
+```powershell
+python scripts\run_private_accad_eval.py `
+  --config configs\private_accad_eval.example.json
+```
+
+The private runner selects bounded dynamic windows, runs the configured seed/particle/noise/occlusion grid,
+and aggregates `gaussian_rw`, `mlp_delta`, and `history_mlp_delta` into:
+
+- `runs/private_accad_eval/aggregate_benchmark_metrics.csv`
+- `runs/private_accad_eval/aggregate_transition_metrics.csv`
+- `runs/private_accad_eval/aggregate_method_means.csv`
+- `runs/private_accad_eval/private_accad_eval_summary.json`
+- `runs/private_accad_eval/private_accad_eval_summary.md`
+
+Override the local ACCAD checkout or output folder without editing the config:
+
+```powershell
+python scripts\run_private_accad_eval.py `
+  --config configs\private_accad_eval.example.json `
+  --data-root D:\Uni-Data\ACCAD `
+  --output runs\private_accad_eval
+```
+
 `prepare_amass_windows.py` records `motion_deg_per_frame` for every selected segment so results can be
 stratified by motion intensity. CI deliberately uses the same selector with `--max-files 1` and
 `--max-segments 6`, so pull requests exercise the benchmark path without scanning or evaluating a full
