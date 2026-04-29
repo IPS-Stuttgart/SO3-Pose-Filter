@@ -16,7 +16,7 @@ jobs:
     name: PyRecEst-backed ACCAD benchmark
     runs-on: ubuntu-latest
     env:
-      SAMPLE_URL: ${{ secrets.AMASS_ACCAD_SAMPLE }}
+      SAMPLE_URL: ${{ secrets.AMASS_ACCAD_SAMPLE || 'https://bwsyncandshare.kit.edu/s/ZABDz4XzMM85L39' }}
 
     steps:
       - name: Check out repository
@@ -94,6 +94,12 @@ jobs:
             --output runs/accad_first_results_sweep \
             --models persistence gaussian_rw learned_delta
 
+      - name: Run compact first-results benchmark
+        run: |
+          python scripts/run_first_results_benchmark.py \
+            --config configs/accad_first_results_benchmark.example.json \
+            --output runs/accad_first_results_benchmark
+
       - name: Validate first-result acceptance criteria
         run: |
           python - <<'PY'
@@ -104,10 +110,18 @@ jobs:
           summary_path = Path("runs/accad_first_results/gaussian_rw/summary.json")
           sweep_path = Path("runs/accad_first_results_sweep/comparison_metrics.csv")
           robustness_path = Path("runs/accad_first_results/gaussian_rw/robustness_metrics.csv")
+          benchmark_summary_path = Path("runs/accad_first_results_benchmark/first_results_summary.json")
+          benchmark_metrics_path = Path("runs/accad_first_results_benchmark/benchmark_metrics.csv")
+          benchmark_heatmap_path = Path("runs/accad_first_results_benchmark/plots/tracking_error_heatmap.svg")
+          benchmark_curve_path = Path("runs/accad_first_results_benchmark/plots/filter_vs_baselines.svg")
 
           assert summary_path.exists(), "missing first-results summary"
           assert sweep_path.exists(), "missing transition sweep metrics"
           assert robustness_path.exists(), "missing robustness metrics"
+          assert benchmark_summary_path.exists(), "missing first-results benchmark summary"
+          assert benchmark_metrics_path.exists(), "missing first-results benchmark metrics"
+          assert benchmark_heatmap_path.exists(), "missing benchmark heatmap"
+          assert benchmark_curve_path.exists(), "missing benchmark curve"
 
           summary = json.loads(summary_path.read_text(encoding="utf-8"))
           means = summary["filter_metrics_mean"]
@@ -128,10 +142,21 @@ jobs:
               robustness_rows = list(csv.DictReader(handle))
           assert len(robustness_rows) >= 9
 
+          benchmark_summary = json.loads(benchmark_summary_path.read_text(encoding="utf-8"))
+          assert benchmark_summary["methods"] == [
+              "raw",
+              "persistence",
+              "gaussian_rw",
+              "pyrecest_pf",
+          ]
+          assert benchmark_summary["row_count"] == 16
+          assert benchmark_summary["acceptance"]["pyrecest_pf_beats_raw_any"]
+
           acceptance = {
               "primary_filter_metrics_mean": means,
               "transition_sweep": sweep_rows,
               "robustness_points": len(robustness_rows),
+              "benchmark": benchmark_summary,
               "criteria": {
                   "pyrecest_backend_used": True,
                   "filter_beats_raw_observations": True,
@@ -163,3 +188,7 @@ jobs:
             runs/accad_first_results/gaussian_rw/plots/*.svg
             runs/accad_first_results_sweep/comparison_metrics.csv
             runs/accad_first_results_sweep/comparison_summary.json
+            runs/accad_first_results_benchmark/first_results_summary.json
+            runs/accad_first_results_benchmark/benchmark_metrics.csv
+            runs/accad_first_results_benchmark/transition_metrics.csv
+            runs/accad_first_results_benchmark/plots/*.svg

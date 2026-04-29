@@ -58,6 +58,28 @@ Limit a sweep to selected transition models:
 python scripts\run_model_sweep.py --config configs\example.json --output runs\sweep --models persistence gaussian_rw
 ```
 
+Run the first-results benchmark wrapper, which reports raw observations, deterministic persistence, the
+NumPy Gaussian random-walk particle filter, and the PyRecEst-backed particle filter on one noise/occlusion
+grid:
+
+```powershell
+python scripts\run_first_results_benchmark.py `
+  --config configs\accad_dynamic_benchmark.example.json `
+  --output runs\accad_dynamic_first_results
+```
+
+The benchmark writes:
+
+- `benchmark_metrics.csv`
+- `first_results_summary.json`
+- `transition_metrics.csv`
+- `plots/tracking_error_heatmap.svg`
+- `plots/filter_vs_baselines.svg`
+
+A lightweight full-ACCAD-window result snapshot is committed under
+`results/accad_dynamic_first_results/`. It was generated from the bounded dynamic-window selection of
+`D:\Uni-Data\ACCAD`, not from committed raw motion files.
+
 ## Real AMASS Data
 
 Point `data_root` in a config JSON file at an AMASS/SMPL-style directory containing `.npz` files with:
@@ -71,11 +93,15 @@ global translation, hands, and face.
 Copy `configs/amass_small.example.json` to a local config and replace `data_root` with the real AMASS
 directory. Keep generated real-data outputs under `runs/`; they are ignored by git.
 
-The ACCAD first-results benchmark workflow uses `configs/accad_first_results.example.json`. It downloads
-the `AMASS_ACCAD_SAMPLE` secret, chunks the motion file into train/validation/test sequence windows, runs
-the PyRecEst-backed Gaussian random-walk filter, runs a compact transition-model sweep, and uploads CSV,
-JSON, and SVG artifacts. The workflow asserts that the filter beats raw synthetic observations and reports
-the persistence rollout baseline under the configured moderate noise/occlusion setting.
+The ACCAD first-results benchmark workflow uses `configs/accad_first_results.example.json` and
+`configs/accad_first_results_benchmark.example.json`. It downloads the OwnCloud ACCAD sample URL from the
+`AMASS_ACCAD_SAMPLE` secret, falling back to the public share URL used for this project, chunks the motion
+file into train/validation/test sequence windows, runs the PyRecEst-backed Gaussian random-walk filter, runs
+a compact transition-model sweep, and runs the first-results benchmark wrapper. It uploads CSV, JSON, and
+SVG artifacts. The workflow asserts that the filter beats raw synthetic observations and reports the
+persistence rollout baseline under the configured moderate noise/occlusion setting. The benchmark workflow
+is intentionally bounded to one downloaded sample, at most six selected windows, and four benchmark grid
+points so pull requests do not scan or evaluate a full AMASS dataset.
 
 For a local ACCAD run on a full dataset checkout, first select a bounded set of dynamic windows and then
 run the dynamic benchmark config:
@@ -97,6 +123,10 @@ python scripts\run_model_sweep.py `
   --config configs\accad_dynamic.example.json `
   --output runs\accad_dynamic_sweep `
   --models persistence gaussian_rw learned_delta
+
+python scripts\run_first_results_benchmark.py `
+  --config configs\accad_dynamic_benchmark.example.json `
+  --output runs\accad_dynamic_first_results
 ```
 
 `prepare_amass_windows.py` records `motion_deg_per_frame` for every selected segment so results can be

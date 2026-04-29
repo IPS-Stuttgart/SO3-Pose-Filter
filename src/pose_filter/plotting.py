@@ -104,6 +104,100 @@ def robustness_plot(
     )
 
 
+def _lerp_channel(start: int, end: int, fraction: float) -> int:
+    return int(round(start + (end - start) * fraction))
+
+
+def _color_lerp(start: str, end: str, fraction: float) -> str:
+    fraction = min(1.0, max(0.0, fraction))
+    start_rgb = tuple(int(start[idx : idx + 2], 16) for idx in (1, 3, 5))
+    end_rgb = tuple(int(end[idx : idx + 2], 16) for idx in (1, 3, 5))
+    rgb = tuple(
+        _lerp_channel(start_channel, end_channel, fraction)
+        for start_channel, end_channel in zip(start_rgb, end_rgb, strict=True)
+    )
+    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+
+def heatmap_svg(
+    path: str | Path,
+    rows: list[dict],
+    x_key: str,
+    y_key: str,
+    value_key: str,
+    title: str,
+    x_label: str,
+    y_label: str,
+    value_label: str,
+    width: int = 760,
+    height: int = 470,
+) -> None:
+    """Write a simple SVG heatmap from dense metric rows."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    values = [
+        float(row[value_key])
+        for row in rows
+        if float(row[value_key]) == float(row[value_key])
+    ]
+    if not rows or not values:
+        path.write_text(
+            "<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8"
+        )
+        return
+
+    xs = sorted({float(row[x_key]) for row in rows})
+    ys = sorted({float(row[y_key]) for row in rows}, reverse=True)
+    lookup = {(float(row[x_key]), float(row[y_key])): float(row[value_key]) for row in rows}
+    v_min, v_max = min(values), max(values)
+    pad_l, pad_r, pad_t, pad_b = 95, 35, 58, 74
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+    cell_w = plot_w / max(1, len(xs))
+    cell_h = plot_h / max(1, len(ys))
+
+    parts = [
+        f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' viewBox='0 0 {width} {height}'>",
+        "<rect width='100%' height='100%' fill='white'/>",
+        f"<text x='{width/2:.1f}' y='28' text-anchor='middle' font-family='Arial' font-size='18'>{title}</text>",
+        f"<text x='{width/2:.1f}' y='{height-20}' text-anchor='middle' font-family='Arial' font-size='13'>{x_label}</text>",
+        f"<text x='20' y='{height/2:.1f}' transform='rotate(-90 20 {height/2:.1f})' text-anchor='middle' font-family='Arial' font-size='13'>{y_label}</text>",
+    ]
+    for y_idx, y_value in enumerate(ys):
+        y = pad_t + y_idx * cell_h
+        parts.append(
+            f"<text x='{pad_l-10}' y='{y+cell_h/2+4:.1f}' text-anchor='end' font-family='Arial' font-size='12'>{y_value:g}</text>"
+        )
+        for x_idx, x_value in enumerate(xs):
+            x = pad_l + x_idx * cell_w
+            value = lookup.get((x_value, y_value), float("nan"))
+            if value == value:
+                fraction = 0.0 if v_max <= v_min else (value - v_min) / (v_max - v_min)
+                fill = _color_lerp("#edf8fb", "#2c7fb8", fraction)
+                text_fill = "white" if fraction > 0.62 else "#111"
+                label = f"{value:.1f}"
+            else:
+                fill = "#f2f2f2"
+                text_fill = "#777"
+                label = "nan"
+            parts.append(
+                f"<rect x='{x:.1f}' y='{y:.1f}' width='{cell_w:.1f}' height='{cell_h:.1f}' fill='{fill}' stroke='white' stroke-width='2'/>"
+            )
+            parts.append(
+                f"<text x='{x+cell_w/2:.1f}' y='{y+cell_h/2+4:.1f}' text-anchor='middle' font-family='Arial' font-size='12' fill='{text_fill}'>{label}</text>"
+            )
+    for x_idx, x_value in enumerate(xs):
+        x = pad_l + x_idx * cell_w
+        parts.append(
+            f"<text x='{x+cell_w/2:.1f}' y='{pad_t+plot_h+20:.1f}' text-anchor='middle' font-family='Arial' font-size='12'>{x_value:g}</text>"
+        )
+    parts.append(
+        f"<text x='{width-pad_r-110}' y='{pad_t-17}' font-family='Arial' font-size='12'>{value_label}: {v_min:.1f}-{v_max:.1f}</text>"
+    )
+    parts.append("</svg>")
+    path.write_text("\n".join(parts), encoding="utf-8")
+
+
 def trajectory_plot(path: str | Path, rows: list[dict]) -> None:
     series = {
         "observed": [(float(r["frame"]), float(r["observed_error_deg"])) for r in rows],

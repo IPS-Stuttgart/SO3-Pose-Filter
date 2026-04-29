@@ -16,7 +16,7 @@ jobs:
     name: Download ACCAD sample and run smoke experiment
     runs-on: ubuntu-latest
     env:
-      SAMPLE_URL: ${{ secrets.AMASS_ACCAD_SAMPLE }}
+      SAMPLE_URL: ${{ secrets.AMASS_ACCAD_SAMPLE || 'https://bwsyncandshare.kit.edu/s/ZABDz4XzMM85L39' }}
 
     steps:
       - name: Check out repository
