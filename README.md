@@ -76,15 +76,8 @@ The benchmark writes:
 - `plots/tracking_error_heatmap.svg`
 - `plots/filter_vs_baselines.svg`
 
-A lightweight full-ACCAD-window result snapshot is committed under
-`results/accad_dynamic_first_results/`. It was generated from the bounded dynamic-window selection of
-`D:\Uni-Data\ACCAD`, not from committed raw motion files.
-
-The first nonlinear learned-transition snapshot is committed under
-`results/accad_dynamic_mlp_single_point/`. It evaluates the same held-out dynamic ACCAD windows at
-`noise_deg=10` and `occlusion_prob=0.25`; the MLP transition particle filter reaches `10.61 deg` mean
-tracking error versus `11.49 deg` for the Gaussian random-walk particle filter, `15.96 deg` for raw
-observations, and `18.90 deg` for persistence.
+Benchmark outputs are local generated artifacts and are excluded from the repository.
+Use `runs/` or `results/` for local result snapshots.
 
 ## Real AMASS Data
 
@@ -97,7 +90,7 @@ The prototype uses the 23 local body joints in `poses[:, 3:72]`, excluding globa
 global translation, hands, and face.
 
 Copy `configs/amass_small.example.json` to a local config and replace `data_root` with the real AMASS
-directory. Keep generated real-data outputs under `runs/`; they are ignored by git.
+directory. Keep generated real-data outputs under `runs/` or `results/`; they are ignored by git.
 
 The ACCAD first-results benchmark workflow uses `configs/accad_first_results.example.json` and
 `configs/accad_first_results_benchmark.example.json`. It downloads the OwnCloud ACCAD sample URL from the

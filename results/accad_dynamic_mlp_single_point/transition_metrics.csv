@@ -1,5 +1,0 @@
-model,metric,value
-gaussian_rw,one_step_error_deg,5.397187342951173
-gaussian_rw,rollout_error_deg,15.137461568289947
-mlp_delta,one_step_error_deg,4.448349353422201
-mlp_delta,rollout_error_deg,13.156283996665152
