@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from pose_filter.evaluation import write_csv, write_json  # noqa: E402
-from pose_filter.experiment import load_config  # noqa: E402
 from prepare_amass_windows import prepare_windows  # noqa: E402
 from run_first_results_benchmark import run_first_results_benchmark  # noqa: E402
 
@@ -29,6 +28,13 @@ DEFAULT_METHODS = (
 
 def _as_path(value: str | Path) -> Path:
     return Path(value).expanduser()
+
+
+def load_private_eval_config(path: str | Path) -> dict[str, Any]:
+    """Load the private evaluation config without applying experiment validation."""
+
+    config_path = Path(path).expanduser()
+    return json.loads(config_path.read_text(encoding="utf-8"))
 
 
 def _int_list(value: Any, default: list[int]) -> list[int]:
@@ -344,7 +350,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    config = load_private_eval_config(args.config)
     summary = run_private_accad_eval(
         config,
         source_data_root=args.data_root,

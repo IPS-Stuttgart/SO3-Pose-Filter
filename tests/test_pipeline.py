@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,7 +29,7 @@ from pose_filter.transitions import (
 )
 from run_first_results_benchmark import run_first_results_benchmark
 from prepare_amass_windows import prepare_windows
-from run_private_accad_eval import run_private_accad_eval
+from run_private_accad_eval import load_private_eval_config, run_private_accad_eval
 
 
 def _write_toy(path: Path, frames: int = 45, fps: float = 60.0) -> None:
@@ -195,6 +196,18 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue((output_dir / "aggregate_method_means.csv").exists())
             self.assertTrue((output_dir / "private_accad_eval_summary.json").exists())
             self.assertTrue((output_dir / "private_accad_eval_summary.md").exists())
+
+    def test_private_accad_eval_config_loader_accepts_source_data_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "private_accad_eval.json"
+            path.write_text(
+                json.dumps({"source_data_root": "D:/Uni-Data/ACCAD"}),
+                encoding="utf-8",
+            )
+
+            config = load_private_eval_config(path)
+
+            self.assertEqual(config["source_data_root"], "D:/Uni-Data/ACCAD")
 
     def test_gru_delta_checkpoint_roundtrip_if_torch_available(self) -> None:
         if not is_torch_available():
