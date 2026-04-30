@@ -48,6 +48,8 @@
   "gru_epochs": 10,
   "gru_learning_rate": 0.003,
   "gru_weight_decay": 0.0001,
+  "gru_delta_scale": 0.5,
+  "gru_max_delta_deg": 12.0,
   "gru_device": "auto",
   "proposal_gain": 0.25,
   "confidence_noise_std": 0.15,
