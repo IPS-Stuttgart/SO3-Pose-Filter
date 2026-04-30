@@ -258,6 +258,8 @@ Useful optional fields:
 - `gru_epochs`
 - `gru_learning_rate`
 - `gru_weight_decay`
+- `gru_delta_scale`
+- `gru_max_delta_deg`
 - `gru_device`
 
 ## Notes
@@ -280,8 +282,10 @@ while keeping the same public transition interface.
 
 `gru_delta` is an optional PyTorch transition baseline. It trains a compact GRU over recent pose log-maps to
 predict the next tangent-space SO(3) delta, uses residual variance for stochastic particle prediction, and
-stores checkpoints as NumPy `.npz` files. Set `gru_device` to `auto`, `cpu`, or `cuda`; `auto` uses CUDA when
-available and otherwise falls back to CPU.
+stores checkpoints as NumPy `.npz` files. `gru_delta_scale` damps the predicted tangent delta before applying
+it, and `gru_max_delta_deg` clips each per-joint tangent delta to keep multi-step rollouts in the training
+motion regime. Set `gru_device` to `auto`, `cpu`, or `cuda`; `auto` uses CUDA when available and otherwise
+falls back to CPU.
 
 Synthetic confidence values default to the original binary mask behavior when `confidence_noise_std` is
 zero. Setting `confidence_noise_std > 0` samples observed-joint confidences in `[min_confidence, 1]`; these

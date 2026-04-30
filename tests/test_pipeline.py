@@ -17,7 +17,7 @@ from pose_filter.evaluation import (
 from pose_filter.measurements import log_likelihood, make_synthetic_measurements
 from pose_filter.particle_filter import run_filter, run_particle_filter
 from pose_filter.pyrecest_filter import is_pyrecest_filter_available
-from pose_filter.so3 import axis_angle_to_matrix
+from pose_filter.so3 import axis_angle_to_matrix, left_delta
 from pose_filter.transitions import (
     GaussianRandomWalkTransition,
     GRUDeltaTransition,
@@ -226,6 +226,8 @@ class PipelineTests(unittest.TestCase):
                 learning_rate=0.003,
                 seed=13,
                 device="cpu",
+                delta_scale=0.5,
+                max_delta_norm_rad=np.radians(1.0),
             )
             history = [train[0].rotations[0], train[0].rotations[1]]
             checkpoint = root / "gru_transition.npz"
@@ -237,12 +239,32 @@ class PipelineTests(unittest.TestCase):
 
             self.assertTrue(np.allclose(pred, loaded_pred))
             self.assertEqual(model.history_length, 3)
+            self.assertAlmostEqual(loaded.delta_scale, 0.5)
+            self.assertAlmostEqual(loaded.max_delta_norm_rad, np.radians(1.0))
             self.assertEqual(
                 loaded.sample_next_from_history(
                     history,
                     np.random.default_rng(2),
                 ).shape,
                 (23, 3, 3),
+            )
+
+            loaded.target_mean = np.ones_like(loaded.target_mean)
+            loaded.target_std = np.zeros_like(loaded.target_std)
+            bounded_pred = loaded.deterministic_next_from_history(history)
+            bounded_delta = left_delta(history[-1], bounded_pred)
+            self.assertLessEqual(
+                float(np.max(np.linalg.norm(bounded_delta, axis=-1))),
+                np.radians(1.0) + 1e-8,
+            )
+            bounded_sample = loaded.sample_next_from_history(
+                history,
+                np.random.default_rng(3),
+            )
+            bounded_sample_delta = left_delta(history[-1], bounded_sample)
+            self.assertLessEqual(
+                float(np.max(np.linalg.norm(bounded_sample_delta, axis=-1))),
+                np.radians(1.0) + 1e-8,
             )
 
     def test_transition_models_and_filter_smoke(self) -> None:

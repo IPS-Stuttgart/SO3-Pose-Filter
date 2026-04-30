@@ -63,6 +63,27 @@ def _make_gru_delta_module(
     return _GRUDeltaModule()
 
 
+def _clip_tangent_delta(delta: np.ndarray, max_norm_rad: float | None) -> np.ndarray:
+    if max_norm_rad is None:
+        return delta
+    max_norm = float(max_norm_rad)
+    if not np.isfinite(max_norm) or max_norm <= 0.0:
+        return delta
+    norm = np.linalg.norm(delta, axis=-1, keepdims=True)
+    scale = np.minimum(1.0, max_norm / np.maximum(norm, 1e-12))
+    return delta * scale
+
+
+def _stabilize_tangent_delta(
+    delta: np.ndarray,
+    *,
+    delta_scale: float = 1.0,
+    max_norm_rad: float | None = None,
+) -> np.ndarray:
+    scaled_delta = np.asarray(delta, dtype=np.float64) * delta_scale
+    return _clip_tangent_delta(scaled_delta, max_norm_rad)
+
+
 class TransitionModel:
     name = "base"
 
@@ -695,6 +716,8 @@ class GRUDeltaTransition(TransitionModel):
     learning_rate: float
     weight_decay: float
     seed: int
+    delta_scale: float = 1.0
+    max_delta_norm_rad: float | None = None
     device: str = "cpu"
     _module: Any | None = field(default=None, init=False, repr=False)
 
@@ -718,6 +741,8 @@ class GRUDeltaTransition(TransitionModel):
         device: str = "auto",
         min_std_rad: float = np.radians(0.25),
         max_std_rad: float | None = None,
+        delta_scale: float = 1.0,
+        max_delta_norm_rad: float | None = None,
     ) -> "GRUDeltaTransition":
         torch = _require_torch()
         torch.manual_seed(int(seed))
@@ -800,6 +825,8 @@ class GRUDeltaTransition(TransitionModel):
             learning_rate=float(learning_rate),
             weight_decay=float(weight_decay),
             seed=int(seed),
+            delta_scale=float(delta_scale),
+            max_delta_norm_rad=max_delta_norm_rad,
             device=resolved_device,
         )
         result._module = model
@@ -861,6 +888,11 @@ class GRUDeltaTransition(TransitionModel):
             xb = torch.as_tensor(standardized, dtype=torch.float32, device=torch_device)
             pred = module(xb)[:, -1, :].detach().cpu().numpy()
         delta = pred * self.target_std + self.target_mean
+        delta = _stabilize_tangent_delta(
+            delta,
+            delta_scale=self.delta_scale,
+            max_norm_rad=self.max_delta_norm_rad,
+        )
         return delta.reshape(current.shape[:-2] + (3,))
 
     def sample_next(
@@ -876,7 +908,8 @@ class GRUDeltaTransition(TransitionModel):
     ) -> np.ndarray:
         mean = self._mean_delta_from_history(history)
         noise = rng.normal(0.0, self.residual_std, size=mean.shape)
-        return left_apply_delta(mean + noise, history[-1])
+        delta = _clip_tangent_delta(mean + noise, self.max_delta_norm_rad)
+        return left_apply_delta(delta, history[-1])
 
     def deterministic_next(self, x_k: np.ndarray) -> np.ndarray:
         return self.deterministic_next_from_history([np.asarray(x_k, dtype=np.float64)])
@@ -914,6 +947,12 @@ class GRUDeltaTransition(TransitionModel):
             "learning_rate": np.asarray(self.learning_rate),
             "weight_decay": np.asarray(self.weight_decay),
             "seed": np.asarray(self.seed),
+            "delta_scale": np.asarray(self.delta_scale),
+            "max_delta_norm_rad": np.asarray(
+                np.nan
+                if self.max_delta_norm_rad is None
+                else self.max_delta_norm_rad
+            ),
             "device": np.asarray(self.device),
             "state_keys": np.asarray(list(self.state_dict), dtype="<U128"),
         }
@@ -925,6 +964,11 @@ class GRUDeltaTransition(TransitionModel):
     def load_npz(cls, path: str | Path) -> "GRUDeltaTransition":
         with np.load(Path(path), allow_pickle=False) as data:
             keys = [str(key) for key in np.asarray(data["state_keys"]).tolist()]
+            max_delta_norm_rad = (
+                float(np.asarray(data["max_delta_norm_rad"]).reshape(-1)[0])
+                if "max_delta_norm_rad" in data
+                else float("nan")
+            )
             return cls(
                 input_mean=np.asarray(data["input_mean"], dtype=np.float64),
                 input_std=np.asarray(data["input_std"], dtype=np.float64),
@@ -942,6 +986,16 @@ class GRUDeltaTransition(TransitionModel):
                 learning_rate=float(np.asarray(data["learning_rate"]).reshape(-1)[0]),
                 weight_decay=float(np.asarray(data["weight_decay"]).reshape(-1)[0]),
                 seed=int(np.asarray(data["seed"]).reshape(-1)[0]),
+                delta_scale=(
+                    float(np.asarray(data["delta_scale"]).reshape(-1)[0])
+                    if "delta_scale" in data
+                    else 1.0
+                ),
+                max_delta_norm_rad=(
+                    None
+                    if np.isnan(max_delta_norm_rad)
+                    else max_delta_norm_rad
+                ),
                 device=str(np.asarray(data["device"]).reshape(-1)[0]),
             )
 
@@ -1014,6 +1068,7 @@ def build_transition_model(
             checkpoint_path = Path(checkpoint)
             if checkpoint_path.exists():
                 return GRUDeltaTransition.load_npz(checkpoint_path)
+        gru_max_delta_deg = config.get("gru_max_delta_deg")
         gru_model = GRUDeltaTransition.fit(
             train_sequences,
             history_length=int(config.get("gru_history_length", config.get("history_length", 8))),
@@ -1025,6 +1080,12 @@ def build_transition_model(
             seed=int(config.get("seed", 0)),
             device=str(config.get("gru_device", "auto")),
             max_std_rad=max_std_rad,
+            delta_scale=float(config.get("gru_delta_scale", 1.0)),
+            max_delta_norm_rad=(
+                None
+                if gru_max_delta_deg is None
+                else np.radians(float(gru_max_delta_deg))
+            ),
         )
         if checkpoint and bool(config.get("transition_save_checkpoint", True)):
             gru_model.save_npz(Path(checkpoint))
