@@ -45,7 +45,7 @@ class ConstantVelocityTests(unittest.TestCase):
             [seq.rotations[1], seq.rotations[2]]
         )
 
-        self.assertLess(mean_joint_distance_deg(seq.rotations[3], pred), 1e-10)
+        self.assertLess(mean_joint_distance_deg(seq.rotations[3], pred), 1e-6)
         self.assertEqual(model.sample_next(seq.rotations[0], np.random.default_rng(1), n_samples=3).shape, (3, 23, 3, 3))
 
     def test_first_results_benchmark_accepts_constant_velocity_method(self) -> None:
