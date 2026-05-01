@@ -138,7 +138,7 @@ def _aggregate_method_means(
         group_rows = [
             row for row in rows if tuple(str(row[key]) for key in group_keys) == group
         ]
-        record = dict(zip(group_keys, group, strict=True))
+        record: dict[str, Any] = dict(zip(group_keys, group, strict=True))
         record.update(
             {
                 "mean_tracking_error_deg": _mean(
