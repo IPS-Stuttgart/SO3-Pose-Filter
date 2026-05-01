@@ -19,6 +19,7 @@ from run_first_results_benchmark import run_first_results_benchmark  # noqa: E40
 DEFAULT_METHODS = (
     "raw",
     "persistence",
+    "constant_velocity",
     "gaussian_rw",
     "mlp_delta",
     "history_mlp_delta",
@@ -300,6 +301,14 @@ def run_private_accad_eval(
         "method_means": method_means,
         "best_method": best_row["method"],
         "best_tracking_error_deg": best_row["mean_tracking_error_deg"],
+        "constant_velocity_beats_persistence": (
+            means_by_method.get("constant_velocity", float("inf"))
+            < means_by_method.get("persistence", float("-inf"))
+        ),
+        "constant_velocity_beats_gaussian_rw": (
+            means_by_method.get("constant_velocity", float("inf"))
+            < means_by_method.get("gaussian_rw", float("-inf"))
+        ),
         "history_mlp_beats_gaussian_rw": (
             means_by_method.get("history_mlp_delta", float("inf"))
             < means_by_method.get("gaussian_rw", float("-inf"))
