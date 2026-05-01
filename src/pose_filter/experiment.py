@@ -18,9 +18,9 @@ from .evaluation import (
     write_csv,
     write_json,
 )
+from .model_factory import build_transition_model
 from .plotting import robustness_plot, trajectory_plot
 from .smoothing import SmootherConfig
-from .transitions import build_transition_model
 
 REQUIRED_CONFIG_FIELDS = {
     "data_root",

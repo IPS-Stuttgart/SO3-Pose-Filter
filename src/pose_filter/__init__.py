@@ -1,6 +1,7 @@
 """SO(3)^K motion filtering prototype."""
 
 __all__ = [
+    "constant_velocity",
     "data",
     "evaluation",
     "experiment",

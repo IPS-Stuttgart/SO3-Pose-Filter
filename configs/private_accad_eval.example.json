@@ -19,6 +19,7 @@
   "benchmark_methods": [
     "raw",
     "persistence",
+    "constant_velocity",
     "gaussian_rw",
     "mlp_delta",
     "history_mlp_delta",

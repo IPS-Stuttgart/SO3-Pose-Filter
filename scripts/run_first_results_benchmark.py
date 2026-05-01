@@ -12,6 +12,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from pose_filter.constant_velocity import ConstantVelocityTransition  # noqa: E402
 from pose_filter.data import load_dataset, split_sequences  # noqa: E402
 from pose_filter.evaluation import (  # noqa: E402
     robustness_rows,
@@ -26,6 +27,7 @@ from pose_filter.transitions import build_transition_model  # noqa: E402
 METHODS = (
     "raw",
     "persistence",
+    "constant_velocity",
     "gaussian_rw",
     "pyrecest_pf",
     "mlp_delta",
@@ -218,6 +220,8 @@ def _write_plots(
             if "gru_delta" in methods
             else "history_mlp_delta"
             if "history_mlp_delta" in methods
+            else "constant_velocity"
+            if "constant_velocity" in methods
             else "pyrecest_pf"
             if "pyrecest_pf" in methods
             else "gaussian_rw",
@@ -266,6 +270,13 @@ def _write_plots(
         "tracking_error_heatmap": str(heatmap_path),
         "filter_vs_baselines": str(curve_path),
     }
+
+
+def _process_noise_cap(config: dict[str, Any]) -> float | None:
+    process_noise_deg = config.get("process_noise_deg")
+    if process_noise_deg is None:
+        return None
+    return np.radians(float(process_noise_deg))
 
 
 def run_first_results_benchmark(
@@ -343,6 +354,28 @@ def run_first_results_benchmark(
         resample_threshold=resample_threshold,
         filter_backend="numpy",
     )
+    constant_velocity_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
+    needs_constant_velocity = "constant_velocity" in methods
+    if needs_constant_velocity:
+        constant_velocity_model = ConstantVelocityTransition.fit(
+            train,
+            max_std_rad=_process_noise_cap(config),
+        )
+        constant_velocity_rows = robustness_rows(
+            test,
+            constant_velocity_model,
+            noise_grid,
+            occlusion_grid,
+            num_particles,
+            seed,
+            proposal_gain=proposal_gain,
+            confidence_noise_std=confidence_noise_std,
+            min_confidence=min_confidence,
+            factorized_update=factorized_update,
+            resample_threshold=resample_threshold,
+            filter_backend="numpy",
+        )
+        constant_velocity_rows_by_key = {_grid_key(row): row for row in constant_velocity_rows}
     pyrecest_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
     if "pyrecest_pf" in methods:
         pyrecest_rows = robustness_rows(
@@ -480,6 +513,18 @@ def run_first_results_benchmark(
                     num_particles,
                 )
             )
+        if "constant_velocity" in methods:
+            rows.append(
+                _method_row(
+                    "constant_velocity",
+                    constant_velocity_rows_by_key[key],
+                    base_row,
+                    "filter_error_deg",
+                    "constant_velocity",
+                    "numpy",
+                    num_particles,
+                )
+            )
         if "gaussian_rw" in methods:
             rows.append(
                 _method_row(
@@ -561,6 +606,15 @@ def run_first_results_benchmark(
         test,
         rollout_horizon=int(config.get("rollout_horizon", 10)),
     )
+    if needs_constant_velocity:
+        transition_rows.extend(
+            transition_metric_rows(
+                "constant_velocity",
+                constant_velocity_model,
+                test,
+                rollout_horizon=int(config.get("rollout_horizon", 10)),
+            )
+        )
     if needs_mlp:
         transition_rows.extend(
             transition_metric_rows(
