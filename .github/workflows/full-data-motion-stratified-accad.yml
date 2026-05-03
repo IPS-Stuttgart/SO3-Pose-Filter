@@ -56,7 +56,7 @@ concurrency:
 jobs:
   full-data-motion-stratified-accad:
     name: Full-data private ACCAD benchmark on self-hosted runner
-    runs-on: [self-hosted, so3-pose-filter-full-data]
+    runs-on: [self-hosted]
     timeout-minutes: 4320
     env:
       CONFIG_PATH: ${{ inputs.config_path }}
@@ -68,7 +68,7 @@ jobs:
       MAX_HASH_MB: ${{ inputs.max_hash_mb }}
 
     steps:
-      - name: Refuse unsafe invocation context
+      - name: Check repository and invocation context
         run: |
           set -euo pipefail
           if [ "${{ github.repository }}" != "FlorianPfaff/SO3-Pose-Filter" ]; then
@@ -79,14 +79,6 @@ jobs:
             echo "This workflow is manual-only." >&2
             exit 1
           fi
-          if [ -z "${DATA_ROOT}" ]; then
-            echo "Missing secret ACCAD_DATA_ROOT. Store the full-data path as a repository or environment secret." >&2
-            exit 1
-          fi
-          if [ ! -d "${DATA_ROOT}" ]; then
-            echo "Configured ACCAD_DATA_ROOT does not exist on this runner." >&2
-            exit 1
-          fi
           case "${TORCH_DEVICE}" in
             auto|cpu|cuda) ;;
             *) echo "torch_device must be auto, cpu, or cuda." >&2; exit 1 ;;
@@ -94,6 +86,28 @@ jobs:
 
       - name: Check out repository
         uses: actions/checkout@v6
+
+      - name: Validate private data root
+        run: |
+          set -euo pipefail
+          if [ -z "${DATA_ROOT}" ]; then
+            echo "Missing secret ACCAD_DATA_ROOT. Store the full-data path as a repository or environment secret." >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          raw = os.environ["DATA_ROOT"]
+          path = Path(raw).expanduser()
+          if not path.is_absolute():
+              path = (Path.cwd() / path).resolve()
+          if not path.is_dir():
+              raise SystemExit(f"Configured ACCAD_DATA_ROOT does not exist on this runner after resolution: {path}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"DATA_ROOT_ABS={path}\n")
+          print(f"Resolved ACCAD_DATA_ROOT to an existing directory on this runner: {path}")
+          PY
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -124,7 +138,7 @@ jobs:
 
           config_path = Path(os.environ["CONFIG_PATH"])
           config = json.loads(config_path.read_text(encoding="utf-8"))
-          config["source_data_root"] = os.environ["DATA_ROOT"]
+          config["source_data_root"] = os.environ["DATA_ROOT_ABS"]
           config["output_dir"] = os.environ["OUTPUT_DIR"]
           config["gru_device"] = os.environ["TORCH_DEVICE"]
           override = os.environ.get("MAX_SEGMENTS_OVERRIDE", "").strip()
@@ -166,7 +180,7 @@ jobs:
           set -euo pipefail
           python scripts/run_motion_stratified_private_accad_eval.py \
             --config runs/full_data_motion_stratified_config.json \
-            --data-root "$DATA_ROOT" \
+            --data-root "$DATA_ROOT_ABS" \
             --output "$OUTPUT_DIR"
 
       - name: Validate full-data outputs
