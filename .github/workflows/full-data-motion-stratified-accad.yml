@@ -95,6 +95,12 @@ jobs:
       MAX_HASH_MB: ${{ inputs.max_hash_mb }}
 
     steps:
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          
       - name: Check repository and invocation context
         run: |
           set -euo pipefail
@@ -194,12 +200,6 @@ jobs:
           print(f"Using dataset root: {data_root}")
           print(f"Persistent cache directory: {cache_dir}")
           PY
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
 
       - name: Install package, Torch extras, and PyRecEst main
         run: |
