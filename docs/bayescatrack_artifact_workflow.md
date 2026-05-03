@@ -4,40 +4,35 @@ Long-running BayesCaTrack experiments should run in this public code repository.
 
 ## Motion-stratified ACCAD artifact
 
-After the motion-stratified evaluation runner is present, dispatch the **ACCAD Motion-Stratified Benchmark** workflow. For GitHub-hosted sample runs, leave `download_sample=true`. For a full private ACCAD checkout mounted on a self-hosted runner, set:
-
-```text
-runs_on_json = ["self-hosted", "<your-runner-label>"]
-download_sample = false
-data_root = /path/to/ACCAD
-```
-
-The workflow uploads an artifact named:
+For a GitHub-hosted sample run, dispatch the **ACCAD Motion-Stratified Benchmark** workflow and leave `download_sample=true`. It uploads an artifact named:
 
 ```text
 bayescatrack-accad-motion-stratified-<run-number>-<sha>
 ```
 
-The artifact contains:
+For the full private ACCAD/AMASS checkout, dispatch the **Full-Data ACCAD Motion-Stratified Benchmark** workflow. This workflow is intentionally pinned to self-hosted runners with the label:
 
 ```text
-run_manifest.json
-motion_stratified_validation.json
-motion_stratified_private_accad_eval_summary.json
-motion_stratified_private_accad_eval_summary.md
-window_selection_report.json
-window_manifest.csv
-aggregate_benchmark_metrics_by_motion_bin.csv
-aggregate_transition_metrics_by_motion_bin.csv
-aggregate_method_means_by_motion_bin.csv
-aggregate_method_means_by_noise_occlusion_motion.csv
-benchmarks/**/first_results_summary.json
-benchmarks/**/benchmark_metrics.csv
-benchmarks/**/transition_metrics.csv
-benchmarks/**/plots/*.svg
+self-hosted, so3-pose-filter-full-data
 ```
 
-`run_manifest.json` records the source SHA, workflow run metadata, config hash/content, selected runtime package versions, and output file hashes. Keep this manifest beside every paper result snapshot.
+Before running it, configure the repository or environment secret:
+
+```text
+ACCAD_DATA_ROOT=/absolute/path/to/ACCAD/on/the/self-hosted/runner
+```
+
+The full-data workflow does not accept an arbitrary runner label or public data path through workflow inputs. This prevents accidental execution on GitHub-hosted runners and avoids exposing local dataset paths in workflow dispatch metadata. It also packages only sanitized paper-facing outputs and does not upload raw AMASS/ACCAD `.npz` files or copied motion-bin segment files.
+
+The full-data workflow uploads an artifact named:
+
+```text
+bayescatrack-accad-motion-stratified-full-<run-number>-<sha>
+```
+
+The sanitized artifact contains aggregate result tables, summary JSON/Markdown files, benchmark summaries, transition metrics, SVG plots, validation metadata, and a redacted `run_manifest.json`.
+
+`run_manifest.json` records the source SHA, workflow run metadata, config hash/content, selected runtime package versions, and output file hashes. For full-data artifacts, local path-like fields are redacted before upload. Keep this manifest beside every paper result snapshot.
 
 ## Repository boundary
 
