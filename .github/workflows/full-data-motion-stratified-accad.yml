@@ -41,6 +41,28 @@ on:
         description: Optional integer override for max_segments. Leave empty to use config.
         required: false
         default: ""
+      data_source_mode:
+        description: "Data source: secret_path, download_and_cache, or cached_only."
+        required: true
+        default: download_and_cache
+        type: choice
+        options:
+          - secret_path
+          - download_and_cache
+          - cached_only
+      dataset_url:
+        description: Optional dataset archive/.npz URL. If empty, secret ACCAD_DATA_URL is used.
+        required: false
+        default: ""
+      cache_subdir:
+        description: Persistent subdirectory below the runner tool cache/temp/cache root.
+        required: true
+        default: so3-pose-filter/accad-full-data
+      force_redownload:
+        description: Redownload and replace cached data even if cache marker exists.
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -62,7 +84,12 @@ jobs:
       CONFIG_PATH: ${{ inputs.config_path }}
       OUTPUT_DIR: ${{ inputs.output_dir }}
       PACKAGED_ARTIFACT_DIR: runs/paper_artifact_full_data_motion_stratified
-      DATA_ROOT: ${{ secrets.ACCAD_DATA_ROOT }}
+      SECRET_DATA_ROOT: ${{ secrets.ACCAD_DATA_ROOT }}
+      SECRET_DATA_URL: ${{ secrets.ACCAD_DATA_URL }}
+      INPUT_DATASET_URL: ${{ inputs.dataset_url }}
+      DATA_SOURCE_MODE: ${{ inputs.data_source_mode }}
+      CACHE_SUBDIR: ${{ inputs.cache_subdir }}
+      FORCE_REDOWNLOAD: ${{ inputs.force_redownload }}
       TORCH_DEVICE: ${{ inputs.torch_device }}
       MAX_SEGMENTS_OVERRIDE: ${{ inputs.max_segments_override }}
       MAX_HASH_MB: ${{ inputs.max_hash_mb }}
@@ -83,30 +110,89 @@ jobs:
             auto|cpu|cuda) ;;
             *) echo "torch_device must be auto, cpu, or cuda." >&2; exit 1 ;;
           esac
+          case "${DATA_SOURCE_MODE}" in
+            secret_path|download_and_cache|cached_only) ;;
+            *) echo "data_source_mode must be secret_path, download_and_cache, or cached_only." >&2; exit 1 ;;
+          esac
 
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Validate private data root
+      - name: Resolve or populate private data root
         run: |
           set -euo pipefail
-          if [ -z "${DATA_ROOT}" ]; then
-            echo "Missing secret ACCAD_DATA_ROOT. Store the full-data path as a repository or environment secret." >&2
-            exit 1
-          fi
           python - <<'PY'
           import os
+          import shutil
+          import urllib.request
+          import zipfile
           from pathlib import Path
 
-          raw = os.environ["DATA_ROOT"]
-          path = Path(raw).expanduser()
-          if not path.is_absolute():
-              path = (Path.cwd() / path).resolve()
-          if not path.is_dir():
-              raise SystemExit(f"Configured ACCAD_DATA_ROOT does not exist on this runner after resolution: {path}")
+          mode = os.environ["DATA_SOURCE_MODE"]
+          force = os.environ.get("FORCE_REDOWNLOAD", "false").lower() == "true"
+          cache_base = Path(os.environ.get("RUNNER_TOOL_CACHE") or os.environ.get("RUNNER_TEMP") or (Path.home() / ".cache"))
+          cache_dir = (cache_base / os.environ["CACHE_SUBDIR"]).expanduser().resolve()
+          marker = cache_dir / ".so3_pose_filter_dataset_ready"
+
+          def resolve_existing(raw: str) -> Path:
+              path = Path(raw).expanduser()
+              if not path.is_absolute():
+                  path = (Path.cwd() / path).resolve()
+              if not path.is_dir():
+                  raise SystemExit(f"Configured data root does not exist on this runner after resolution: {path}")
+              return path
+
+          def find_dataset_root(root: Path) -> Path:
+              if any(root.rglob("*.npz")):
+                  return root
+              children = [child for child in root.iterdir() if child.is_dir()]
+              if len(children) == 1 and any(children[0].rglob("*.npz")):
+                  return children[0]
+              raise SystemExit(f"Downloaded/cache directory contains no .npz files: {root}")
+
+          if mode == "secret_path":
+              raw = os.environ.get("SECRET_DATA_ROOT", "").strip()
+              if not raw:
+                  raise SystemExit("data_source_mode=secret_path requires secret ACCAD_DATA_ROOT.")
+              data_root = resolve_existing(raw)
+          else:
+              if marker.exists() and not force:
+                  data_root = find_dataset_root(cache_dir)
+              elif mode == "cached_only":
+                  raise SystemExit(f"No ready cached dataset found at {cache_dir}. Run once with data_source_mode=download_and_cache.")
+              else:
+                  url = os.environ.get("INPUT_DATASET_URL", "").strip() or os.environ.get("SECRET_DATA_URL", "").strip()
+                  if not url:
+                      raise SystemExit("download_and_cache requires either workflow input dataset_url or secret ACCAD_DATA_URL.")
+                  if cache_dir.exists():
+                      shutil.rmtree(cache_dir)
+                  cache_dir.mkdir(parents=True, exist_ok=True)
+                  download_path = cache_dir / "downloaded_dataset"
+                  request = urllib.request.Request(url, headers={"User-Agent": "SO3-Pose-Filter-full-data-workflow/1.0"})
+                  print(f"Downloading dataset into persistent runner cache: {cache_dir}")
+                  with urllib.request.urlopen(request, timeout=1800) as response:  # nosec B310
+                      with download_path.open("wb") as handle:
+                          shutil.copyfileobj(response, handle)
+                  if zipfile.is_zipfile(download_path):
+                      extract_dir = cache_dir / "extracted"
+                      extract_dir.mkdir(parents=True, exist_ok=True)
+                      with zipfile.ZipFile(download_path) as archive:
+                          archive.extractall(extract_dir)
+                      data_root = find_dataset_root(extract_dir)
+                  else:
+                      # Treat a single downloaded .npz as a minimal AMASS-style dataset root.
+                      single_dir = cache_dir / "single_npz"
+                      single_dir.mkdir(parents=True, exist_ok=True)
+                      target = single_dir / "sample.npz"
+                      shutil.move(str(download_path), target)
+                      data_root = find_dataset_root(single_dir)
+                  marker.write_text(f"data_root={data_root}\n", encoding="utf-8")
+
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
-              handle.write(f"DATA_ROOT_ABS={path}\n")
-          print(f"Resolved ACCAD_DATA_ROOT to an existing directory on this runner: {path}")
+              handle.write(f"DATA_ROOT_ABS={data_root}\n")
+              handle.write(f"DATA_CACHE_DIR={cache_dir}\n")
+          print(f"Using dataset root: {data_root}")
+          print(f"Persistent cache directory: {cache_dir}")
           PY
 
       - name: Set up Python
@@ -157,6 +243,8 @@ jobs:
               "benchmark_noise_deg": config.get("benchmark_noise_deg"),
               "benchmark_occlusion_prob": config.get("benchmark_occlusion_prob"),
               "gru_device": config.get("gru_device"),
+              "data_source_mode": os.environ["DATA_SOURCE_MODE"],
+              "data_cache_dir": os.environ.get("DATA_CACHE_DIR", ""),
           }, indent=2))
           PY
 
@@ -215,6 +303,7 @@ jobs:
               "methods": sorted({row["method"] for row in rows}),
               "row_count": len(rows),
               "run_count": len(summary.get("runs", [])),
+              "data_source_mode": os.environ["DATA_SOURCE_MODE"],
           }
           (output_dir / "motion_stratified_validation.json").write_text(json.dumps(validation, indent=2), encoding="utf-8")
           print(json.dumps(validation, indent=2))
