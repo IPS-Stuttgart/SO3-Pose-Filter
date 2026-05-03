@@ -16,15 +16,37 @@ For the full private ACCAD/AMASS checkout, dispatch the **Full-Data ACCAD Motion
 self-hosted
 ```
 
-Before running it, configure the repository or environment secret:
+The full-data workflow supports three data-source modes:
+
+```text
+secret_path         Use ACCAD_DATA_ROOT as a local path on the selected self-hosted runner.
+download_and_cache  Download an archive/.npz from dataset_url or ACCAD_DATA_URL, then reuse it from a persistent runner cache.
+cached_only         Use the persistent runner cache and fail if it has not been populated before.
+```
+
+For `secret_path`, configure the repository or environment secret:
 
 ```text
 ACCAD_DATA_ROOT=/path/to/ACCAD/on/the/self-hosted/runner
 ```
 
-An absolute path is recommended because GitHub Actions checks out the repository into a runner work directory that can vary by machine and service configuration. A relative path is still accepted; the workflow resolves it relative to the checked-out repository directory before validating that it exists.
+For `download_and_cache`, either provide `dataset_url` when manually dispatching the workflow or configure the repository/environment secret:
 
-The full-data workflow does not expose the full-data path through workflow inputs, which avoids putting local dataset paths into public workflow dispatch metadata. It also packages only sanitized paper-facing outputs and does not upload raw AMASS/ACCAD `.npz` files or copied motion-bin segment files.
+```text
+ACCAD_DATA_URL=https://example.invalid/path/to/accad-or-amass-archive.zip
+```
+
+The dataset is cached under:
+
+```text
+$RUNNER_TOOL_CACHE/<cache_subdir>
+```
+
+or, if `RUNNER_TOOL_CACHE` is unavailable, under `$RUNNER_TEMP/<cache_subdir>`. On a persistent self-hosted runner this avoids re-downloading the full dataset on later runs. Use `force_redownload=true` to replace the cached copy.
+
+An absolute local path is recommended for `ACCAD_DATA_ROOT` because GitHub Actions checks out the repository into a runner work directory that can vary by machine and service configuration. A relative path is still accepted; the workflow resolves it relative to the checked-out repository directory before validating that it exists.
+
+The full-data workflow does not upload raw AMASS/ACCAD `.npz` files or copied motion-bin segment files. It packages only sanitized paper-facing outputs.
 
 The full-data workflow uploads an artifact named:
 
