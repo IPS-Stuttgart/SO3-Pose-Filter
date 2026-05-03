@@ -1,0 +1,174 @@
+name: ACCAD Motion-Stratified Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs_on_json:
+        description: JSON array for runs-on. Use a self-hosted label set if the full private dataset is mounted there.
+        required: true
+        default: '["ubuntu-latest"]'
+      config_path:
+        description: Config JSON for scripts/run_motion_stratified_private_accad_eval.py.
+        required: true
+        default: configs/private_accad_eval.example.json
+      data_root:
+        description: Data root passed to --data-root. Ignored as source when download_sample=true except as download target.
+        required: true
+        default: data/accad_secret_sample
+      output_dir:
+        description: Directory where benchmark outputs are written.
+        required: true
+        default: runs/motion_stratified_private_accad_eval
+      download_sample:
+        description: Download AMASS/ACCAD sample via scripts/download_amass_sample.py before running.
+        required: true
+        type: boolean
+        default: true
+      sample_url:
+        description: Optional sample URL override. If blank, secrets.AMASS_ACCAD_SAMPLE is used.
+        required: false
+        default: ""
+      skip_prepare:
+        description: Reuse existing window_selection_report.json and segments_dir.
+        required: true
+        type: boolean
+        default: false
+      artifact_name_prefix:
+        description: Prefix for the uploaded artifact consumed by the paper repository.
+        required: true
+        default: bayescatrack-accad-motion-stratified
+      artifact_retention_days:
+        description: Number of days to retain the uploaded artifact.
+        required: true
+        default: "90"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}-${{ inputs.output_dir }}
+  cancel-in-progress: false
+
+jobs:
+  motion-stratified-accad:
+    name: Produce paper artifact bundle
+    runs-on: ${{ fromJSON(inputs.runs_on_json) }}
+    env:
+      CONFIG_PATH: ${{ inputs.config_path }}
+      DATA_ROOT: ${{ inputs.data_root }}
+      OUTPUT_DIR: ${{ inputs.output_dir }}
+      SAMPLE_URL: ${{ inputs.sample_url || secrets.AMASS_ACCAD_SAMPLE || 'https://bwsyncandshare.kit.edu/s/ZABDz4XzMM85L39' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package, Torch extras, and PyRecEst main
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[torch]"
+          python -m pip install --upgrade "git+https://github.com/FlorianPfaff/PyRecEst.git@main"
+
+      - name: Download ACCAD AMASS sample
+        if: ${{ inputs.download_sample == true || inputs.download_sample == 'true' }}
+        run: |
+          test -n "$SAMPLE_URL" || { echo "No sample URL provided. Set inputs.sample_url or secrets.AMASS_ACCAD_SAMPLE." >&2; exit 1; }
+          mkdir -p "$DATA_ROOT" runs
+          python scripts/download_amass_sample.py \
+            --url "$SAMPLE_URL" \
+            --output "$DATA_ROOT/sample.npz" \
+            --report runs/motion_stratified_download_report.json
+
+      - name: Run motion-stratified private ACCAD evaluation
+        run: |
+          SKIP_PREPARE_ARG=""
+          if [ "${{ inputs.skip_prepare }}" = "true" ]; then
+            SKIP_PREPARE_ARG="--skip-prepare"
+          fi
+          python scripts/run_motion_stratified_private_accad_eval.py \
+            --config "$CONFIG_PATH" \
+            --data-root "$DATA_ROOT" \
+            --output "$OUTPUT_DIR" \
+            $SKIP_PREPARE_ARG
+
+      - name: Validate motion-stratified outputs
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import os
+          from pathlib import Path
+
+          output_dir = Path(os.environ["OUTPUT_DIR"])
+          required = [
+              output_dir / "motion_stratified_private_accad_eval_summary.json",
+              output_dir / "motion_stratified_private_accad_eval_summary.md",
+              output_dir / "aggregate_benchmark_metrics_by_motion_bin.csv",
+              output_dir / "aggregate_transition_metrics_by_motion_bin.csv",
+              output_dir / "aggregate_method_means_by_motion_bin.csv",
+              output_dir / "aggregate_method_means_by_noise_occlusion_motion.csv",
+          ]
+          for path in required:
+              assert path.exists(), f"missing required artifact: {path}"
+
+          summary = json.loads(required[0].read_text(encoding="utf-8"))
+          assert summary["motion_bin_counts"], "no motion bins were produced"
+          assert summary["method_means_by_motion_bin"], "no method means were produced"
+
+          with required[4].open(newline="", encoding="utf-8") as handle:
+              rows = list(csv.DictReader(handle))
+          assert rows, "aggregate_method_means_by_motion_bin.csv is empty"
+          methods = sorted({row["method"] for row in rows})
+          bins = sorted({row["motion_bin"] for row in rows})
+          validation = {
+              "output_dir": str(output_dir),
+              "motion_bins": bins,
+              "methods": methods,
+              "row_count": len(rows),
+          }
+          (output_dir / "motion_stratified_validation.json").write_text(
+              json.dumps(validation, indent=2), encoding="utf-8"
+          )
+          print(json.dumps(validation, indent=2))
+          PY
+
+      - name: Write reproducibility manifest
+        run: |
+          python scripts/write_experiment_manifest.py \
+            --experiment-name accad-motion-stratified \
+            --config "$CONFIG_PATH" \
+            --result-root "$OUTPUT_DIR" \
+            --output "$OUTPUT_DIR/run_manifest.json" \
+            --source-data-root "$DATA_ROOT"
+
+      - name: Upload paper-consumable artifact bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name_prefix }}-${{ github.run_number }}-${{ github.sha }}
+          retention-days: ${{ inputs.artifact_retention_days }}
+          path: |
+            runs/motion_stratified_download_report.json
+            ${{ inputs.output_dir }}/run_manifest.json
+            ${{ inputs.output_dir }}/motion_stratified_validation.json
+            ${{ inputs.output_dir }}/motion_stratified_private_accad_eval_summary.json
+            ${{ inputs.output_dir }}/motion_stratified_private_accad_eval_summary.md
+            ${{ inputs.output_dir }}/window_selection_report.json
+            ${{ inputs.output_dir }}/window_manifest.csv
+            ${{ inputs.output_dir }}/aggregate_benchmark_metrics_by_motion_bin.csv
+            ${{ inputs.output_dir }}/aggregate_transition_metrics_by_motion_bin.csv
+            ${{ inputs.output_dir }}/aggregate_method_means_by_motion_bin.csv
+            ${{ inputs.output_dir }}/aggregate_method_means_by_noise_occlusion_motion.csv
+            ${{ inputs.output_dir }}/benchmarks/**/first_results_summary.json
+            ${{ inputs.output_dir }}/benchmarks/**/benchmark_metrics.csv
+            ${{ inputs.output_dir }}/benchmarks/**/transition_metrics.csv
+            ${{ inputs.output_dir }}/benchmarks/**/plots/*.svg
