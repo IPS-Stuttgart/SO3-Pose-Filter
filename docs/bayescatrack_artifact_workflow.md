@@ -16,12 +16,30 @@ For the full private ACCAD/AMASS checkout, dispatch the **Full-Data ACCAD Motion
 self-hosted
 ```
 
-The full-data workflow supports three data-source modes:
+The full-data workflow supports four data-source modes:
 
 ```text
+owncloud_webdav     Download from the password-protected ownCloud/WebDAV share with rclone, then reuse it from a persistent runner cache.
 secret_path         Use ACCAD_DATA_ROOT as a local path on the selected self-hosted runner.
 download_and_cache  Download an archive/.npz from dataset_url or ACCAD_DATA_URL, then reuse it from a persistent runner cache.
 cached_only         Use the persistent runner cache and fail if it has not been populated before.
+```
+
+The default mode is `owncloud_webdav`. Configure these repository or environment secrets:
+
+```text
+ACCAD_DATA_KEY=<ownCloud public-share token/user>
+ACCAD_DATA_PASSWORD=<ownCloud public-share password>
+```
+
+The workflow installs `rclone` before checkout, then populates the cache with:
+
+```bash
+rclone copy :webdav: ./ACCAD_DATA \
+  --webdav-url 'https://isas-server.iar.kit.edu/owncloud/public.php/webdav/' \
+  --webdav-vendor owncloud \
+  --webdav-user "$ACCAD_DATA_KEY" \
+  --webdav-pass "$(rclone obscure "$ACCAD_DATA_PASSWORD")"
 ```
 
 For `secret_path`, configure the repository or environment secret:
