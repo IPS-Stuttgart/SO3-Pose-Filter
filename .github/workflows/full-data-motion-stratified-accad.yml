@@ -103,26 +103,6 @@ jobs:
       MAX_HASH_MB: ${{ inputs.max_hash_mb }}
 
     steps:
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install rclone via pip
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade rclone
-          if ! command -v rclone >/dev/null 2>&1; then
-            echo "pip package 'rclone' did not expose a usable rclone binary; installing official binary fallback." >&2
-            mkdir -p "$RUNNER_TEMP/rclone-bin"
-            curl -fsSL https://rclone.org/install.sh | bash -s -- --no-sudo --dest "$RUNNER_TEMP/rclone-bin"
-            echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
-            export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
-          fi
-          rclone version
-
       - name: Check repository and invocation context
         run: |
           set -euo pipefail
@@ -146,6 +126,27 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install rclone via pip
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade rclone
+          if ! command -v rclone >/dev/null 2>&1; then
+            echo "pip package 'rclone' did not expose a usable rclone binary; installing official binary fallback." >&2
+            mkdir -p "$RUNNER_TEMP/rclone-bin"
+            curl -fsSL https://rclone.org/install.sh | bash -s -- --no-sudo --dest "$RUNNER_TEMP/rclone-bin"
+            echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+            export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+          fi
+          rclone version
+
       - name: Resolve or populate private data root
         run: |
           set -euo pipefail
@@ -162,14 +163,6 @@ jobs:
           cache_base = Path(os.environ.get("RUNNER_TOOL_CACHE") or os.environ.get("RUNNER_TEMP") or (Path.home() / ".cache"))
           cache_dir = (cache_base / os.environ["CACHE_SUBDIR"]).expanduser().resolve()
           marker = cache_dir / ".so3_pose_filter_dataset_ready"
-
-          def resolve_existing(raw: str) -> Path:
-              path = Path(raw).expanduser()
-              if not path.is_absolute():
-                  path = (Path.cwd() / path).resolve()
-              if not path.is_dir():
-                  raise SystemExit(f"Configured data root does not exist on this runner after resolution: {path}")
-              return path
 
           def find_dataset_root(root: Path) -> Path:
               if any(root.rglob("*.npz")):
@@ -190,7 +183,12 @@ jobs:
               raw = os.environ.get("SECRET_DATA_ROOT", "").strip()
               if not raw:
                   raise SystemExit("data_source_mode=secret_path requires secret ACCAD_DATA_ROOT.")
-              write_env(resolve_existing(raw))
+              path = Path(raw).expanduser()
+              if not path.is_absolute():
+                  path = (Path.cwd() / path).resolve()
+              if not path.is_dir():
+                  raise SystemExit(f"Configured data root does not exist on this runner after resolution: {path}")
+              write_env(path)
               raise SystemExit(0)
 
           if marker.exists() and not force:
@@ -215,7 +213,7 @@ jobs:
               target_dir = cache_dir / "ACCAD_DATA"
               target_dir.mkdir(parents=True, exist_ok=True)
               obscured = subprocess.check_output(["rclone", "obscure", password], text=True).strip()
-              cmd = [
+              subprocess.check_call([
                   "rclone",
                   "copy",
                   ":webdav:",
@@ -229,9 +227,7 @@ jobs:
                   "--webdav-pass",
                   obscured,
                   "--progress",
-              ]
-              print(f"Copying ownCloud WebDAV share into persistent runner cache: {target_dir}")
-              subprocess.check_call(cmd)
+              ])
               data_root = find_dataset_root(target_dir)
           else:
               url = os.environ.get("INPUT_DATASET_URL", "").strip() or os.environ.get("SECRET_DATA_URL", "").strip()
@@ -239,8 +235,7 @@ jobs:
                   raise SystemExit("download_and_cache requires either workflow input dataset_url or secret ACCAD_DATA_URL.")
               download_path = cache_dir / "downloaded_dataset"
               request = urllib.request.Request(url, headers={"User-Agent": "SO3-Pose-Filter-full-data-workflow/1.0"})
-              print(f"Downloading dataset into persistent runner cache: {cache_dir}")
-              with urllib.request.urlopen(request, timeout=1800) as response:  # nosec B310
+              with urllib.request.urlopen(request, timeout=1800) as response:
                   with download_path.open("wb") as handle:
                       shutil.copyfileobj(response, handle)
               if zipfile.is_zipfile(download_path):
@@ -252,8 +247,7 @@ jobs:
               else:
                   single_dir = cache_dir / "single_npz"
                   single_dir.mkdir(parents=True, exist_ok=True)
-                  target = single_dir / "sample.npz"
-                  shutil.move(str(download_path), target)
+                  shutil.move(str(download_path), single_dir / "sample.npz")
                   data_root = find_dataset_root(single_dir)
 
           marker.write_text(f"data_root={data_root}\n", encoding="utf-8")
