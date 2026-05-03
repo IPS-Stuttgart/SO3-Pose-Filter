@@ -10,19 +10,21 @@ For a GitHub-hosted sample run, dispatch the **ACCAD Motion-Stratified Benchmark
 bayescatrack-accad-motion-stratified-<run-number>-<sha>
 ```
 
-For the full private ACCAD/AMASS checkout, dispatch the **Full-Data ACCAD Motion-Stratified Benchmark** workflow. This workflow is intentionally pinned to self-hosted runners with the label:
+For the full private ACCAD/AMASS checkout, dispatch the **Full-Data ACCAD Motion-Stratified Benchmark** workflow. This workflow runs on any self-hosted runner attached to the repository:
 
 ```text
-self-hosted, so3-pose-filter-full-data
+self-hosted
 ```
 
 Before running it, configure the repository or environment secret:
 
 ```text
-ACCAD_DATA_ROOT=/absolute/path/to/ACCAD/on/the/self-hosted/runner
+ACCAD_DATA_ROOT=/path/to/ACCAD/on/the/self-hosted/runner
 ```
 
-The full-data workflow does not accept an arbitrary runner label or public data path through workflow inputs. This prevents accidental execution on GitHub-hosted runners and avoids exposing local dataset paths in workflow dispatch metadata. It also packages only sanitized paper-facing outputs and does not upload raw AMASS/ACCAD `.npz` files or copied motion-bin segment files.
+An absolute path is recommended because GitHub Actions checks out the repository into a runner work directory that can vary by machine and service configuration. A relative path is still accepted; the workflow resolves it relative to the checked-out repository directory before validating that it exists.
+
+The full-data workflow does not expose the full-data path through workflow inputs, which avoids putting local dataset paths into public workflow dispatch metadata. It also packages only sanitized paper-facing outputs and does not upload raw AMASS/ACCAD `.npz` files or copied motion-bin segment files.
 
 The full-data workflow uploads an artifact named:
 
