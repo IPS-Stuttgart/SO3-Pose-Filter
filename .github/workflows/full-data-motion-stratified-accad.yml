@@ -347,8 +347,11 @@ jobs:
               output_dir / "motion_stratified_private_accad_eval_summary.md",
               output_dir / "aggregate_benchmark_metrics_by_motion_bin.csv",
               output_dir / "aggregate_transition_metrics_by_motion_bin.csv",
+              output_dir / "aggregate_transition_means_by_motion_bin.csv",
               output_dir / "aggregate_method_means_by_motion_bin.csv",
               output_dir / "aggregate_method_means_by_noise_occlusion_motion.csv",
+              output_dir / "robustness_summary_by_motion_bin.csv",
+              output_dir / "transition_tracking_diagnostics_by_motion_bin.csv",
           ]
           for path in required:
               assert path.exists(), f"missing required artifact: {path}"

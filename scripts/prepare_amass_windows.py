@@ -16,6 +16,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from pose_filter.so3 import axis_angle_to_matrix, geodesic_distance  # noqa: E402
 
+MOTION_BINS = (
+    ("low_motion", 0.0, 0.5),
+    ("medium_motion", 0.5, 1.5),
+    ("high_motion", 1.5, float("inf")),
+)
+
 
 @dataclass(frozen=True)
 class WindowCandidate:
@@ -72,6 +78,14 @@ def _motion_deg_per_frame(rotations: np.ndarray) -> np.ndarray:
     if rotations.shape[0] < 2:
         return np.empty(0, dtype=np.float64)
     return np.degrees(np.mean(geodesic_distance(rotations[:-1], rotations[1:]), axis=1))
+
+
+def _motion_bin(motion_deg_per_frame: float) -> str:
+    motion = float(motion_deg_per_frame)
+    for name, lower, upper in MOTION_BINS:
+        if lower <= motion < upper:
+            return name
+    return MOTION_BINS[-1][0]
 
 
 def candidate_windows_for_file(
@@ -179,6 +193,28 @@ def select_windows(
             ordered = [filtered[int(idx)] for idx in indices]
     elif selection == "top-motion":
         ordered = sorted(filtered, key=lambda row: row.motion_deg_per_frame, reverse=True)
+    elif selection == "balanced-motion":
+        by_bin = {name: [] for name, _, _ in MOTION_BINS}
+        for candidate in filtered:
+            by_bin[_motion_bin(candidate.motion_deg_per_frame)].append(candidate)
+        for name in by_bin:
+            by_bin[name].sort(key=lambda row: row.motion_deg_per_frame, reverse=True)
+        per_bin = max(1, int(max_segments) // len(MOTION_BINS))
+        remainder = int(max_segments) - per_bin * len(MOTION_BINS)
+        ordered = []
+        for idx, (name, _, _) in enumerate(MOTION_BINS):
+            take = per_bin + (1 if idx < remainder else 0)
+            ordered.extend(by_bin[name][:take])
+        if len(ordered) < int(max_segments):
+            selected_ids = {id(candidate) for candidate in ordered}
+            fill = [
+                candidate
+                for candidate in sorted(
+                    filtered, key=lambda row: row.motion_deg_per_frame, reverse=True
+                )
+                if id(candidate) not in selected_ids
+            ]
+            ordered.extend(fill[: int(max_segments) - len(ordered)])
     else:
         raise ValueError(f"unknown selection: {selection}")
 
@@ -334,7 +370,7 @@ def main() -> None:
     parser.add_argument("--max-segments", type=int, default=24, help="Maximum windows to materialize")
     parser.add_argument(
         "--selection",
-        choices=("top-motion", "first", "uniform"),
+        choices=("top-motion", "balanced-motion", "first", "uniform"),
         default="top-motion",
         help="Window selection strategy",
     )

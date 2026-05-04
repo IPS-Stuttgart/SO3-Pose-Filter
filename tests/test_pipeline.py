@@ -82,6 +82,42 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(len(seqs), 2)
             self.assertEqual(seqs[0].rotations.shape[1:], (23, 3, 3))
 
+    def test_prepare_amass_windows_balances_motion_bins(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx, scale in enumerate([0.03, 0.1, 0.5]):
+                poses = np.zeros((120, 156), dtype=np.float64)
+                t = np.linspace(0.0, 1.0, poses.shape[0])
+                for joint in range(23):
+                    start = 3 + joint * 3
+                    poses[:, start] = scale * np.sin(2.0 * np.pi * t)
+                    poses[:, start + 1] = 0.5 * scale * np.cos(2.0 * np.pi * t)
+                np.savez(
+                    root / f"seq_{idx}.npz",
+                    poses=poses,
+                    mocap_framerate=np.asarray(60.0),
+                )
+
+            report = prepare_windows(
+                data_root=root,
+                output_dir=root / "balanced_segments",
+                report_path=root / "balanced_report.json",
+                manifest_path=root / "balanced_manifest.csv",
+                frame_rate=20,
+                num_joints=23,
+                segment_frames=12,
+                stride_frames=6,
+                max_segments=3,
+                selection="balanced-motion",
+                max_per_file=1,
+            )
+
+            self.assertEqual(report["selected_count"], 3)
+            motions = [row["motion_deg_per_frame"] for row in report["selected"]]
+            self.assertTrue(any(motion < 0.5 for motion in motions))
+            self.assertTrue(any(0.5 <= motion < 1.5 for motion in motions))
+            self.assertTrue(any(motion >= 1.5 for motion in motions))
+
     def test_first_results_benchmark_writes_summary_and_plots(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

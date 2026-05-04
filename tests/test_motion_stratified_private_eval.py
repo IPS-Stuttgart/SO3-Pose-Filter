@@ -39,7 +39,7 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
                     "segment_frames": 12,
                     "stride_frames": 6,
                     "max_segments": 3,
-                    "selection": "top-motion",
+                    "selection": "balanced-motion",
                     "max_per_file": 1,
                     "noise_deg": 5.0,
                     "occlusion_prob": 0.0,
@@ -68,12 +68,20 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
             )
 
             self.assertTrue(summary["motion_bin_counts"])
+            self.assertIn("low_motion", summary["motion_bin_counts"])
+            self.assertIn("medium_motion", summary["motion_bin_counts"])
+            self.assertIn("high_motion", summary["motion_bin_counts"])
             self.assertTrue(summary["method_means_by_motion_bin"])
+            self.assertTrue(summary["robustness_summary_by_motion_bin"])
+            self.assertTrue(summary["transition_tracking_diagnostics_by_motion_bin"])
             self.assertTrue(
                 (output_dir / "aggregate_benchmark_metrics_by_motion_bin.csv").exists()
             )
             self.assertTrue(
                 (output_dir / "aggregate_transition_metrics_by_motion_bin.csv").exists()
+            )
+            self.assertTrue(
+                (output_dir / "aggregate_transition_means_by_motion_bin.csv").exists()
             )
             self.assertTrue(
                 (output_dir / "aggregate_method_means_by_motion_bin.csv").exists()
@@ -82,6 +90,15 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
                 (
                     output_dir
                     / "aggregate_method_means_by_noise_occlusion_motion.csv"
+                ).exists()
+            )
+            self.assertTrue(
+                (output_dir / "robustness_summary_by_motion_bin.csv").exists()
+            )
+            self.assertTrue(
+                (
+                    output_dir
+                    / "transition_tracking_diagnostics_by_motion_bin.csv"
                 ).exists()
             )
             self.assertTrue(

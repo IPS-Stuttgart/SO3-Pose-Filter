@@ -71,6 +71,22 @@ def _mean(values: list[float]) -> float:
     return float(np.mean(arr))
 
 
+def _std(values: list[float]) -> float:
+    arr = np.asarray(values, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 2:
+        return float("nan")
+    return float(np.std(arr, ddof=1))
+
+
+def _sem(values: list[float]) -> float:
+    arr = np.asarray(values, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 2:
+        return float("nan")
+    return float(np.std(arr, ddof=1) / np.sqrt(arr.size))
+
+
 def _motion_bin(motion_deg_per_frame: float) -> str:
     motion = float(motion_deg_per_frame)
     for name, lower, upper in MOTION_BINS:
@@ -139,24 +155,136 @@ def _aggregate_method_means(
             row for row in rows if tuple(str(row[key]) for key in group_keys) == group
         ]
         record: dict[str, Any] = dict(zip(group_keys, group, strict=True))
+        tracking = [float(row["tracking_error_deg"]) for row in group_rows]
+        raw_improvement = [float(row["improvement_vs_raw_deg"]) for row in group_rows]
+        persistence_improvement = [
+            float(row["improvement_vs_persistence_deg"]) for row in group_rows
+        ]
         record.update(
             {
-                "mean_tracking_error_deg": _mean(
-                    [float(row["tracking_error_deg"]) for row in group_rows]
-                ),
-                "mean_improvement_vs_raw_deg": _mean(
-                    [float(row["improvement_vs_raw_deg"]) for row in group_rows]
-                ),
+                "mean_tracking_error_deg": _mean(tracking),
+                "std_tracking_error_deg": _std(tracking),
+                "sem_tracking_error_deg": _sem(tracking),
+                "mean_improvement_vs_raw_deg": _mean(raw_improvement),
+                "std_improvement_vs_raw_deg": _std(raw_improvement),
+                "sem_improvement_vs_raw_deg": _sem(raw_improvement),
                 "mean_improvement_vs_persistence_deg": _mean(
-                    [
-                        float(row["improvement_vs_persistence_deg"])
-                        for row in group_rows
-                    ]
+                    persistence_improvement
+                ),
+                "std_improvement_vs_persistence_deg": _std(
+                    persistence_improvement
+                ),
+                "sem_improvement_vs_persistence_deg": _sem(
+                    persistence_improvement
                 ),
                 "row_count": len(group_rows),
             }
         )
         out.append(record)
+    return out
+
+
+def _aggregate_transition_means(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups = sorted(
+        {
+            (str(row["motion_bin"]), str(row["model"]), str(row["metric"]))
+            for row in rows
+        }
+    )
+    out = []
+    for motion_bin, model, metric in groups:
+        values = [
+            float(row["value"])
+            for row in rows
+            if str(row["motion_bin"]) == motion_bin
+            and str(row["model"]) == model
+            and str(row["metric"]) == metric
+        ]
+        out.append(
+            {
+                "motion_bin": motion_bin,
+                "model": model,
+                "metric": metric,
+                "mean_value": _mean(values),
+                "std_value": _std(values),
+                "sem_value": _sem(values),
+                "row_count": len(values),
+            }
+        )
+    return out
+
+
+def _robustness_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups = sorted({(str(row["motion_bin"]), str(row["method"])) for row in rows})
+    out = []
+    for motion_bin, method in groups:
+        values = [
+            float(row["mean_tracking_error_deg"])
+            for row in rows
+            if str(row["motion_bin"]) == motion_bin and str(row["method"]) == method
+        ]
+        finite = np.asarray(values, dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        out.append(
+            {
+                "motion_bin": motion_bin,
+                "method": method,
+                "best_tracking_error_deg": float(np.min(finite))
+                if finite.size
+                else float("nan"),
+                "median_tracking_error_deg": float(np.median(finite))
+                if finite.size
+                else float("nan"),
+                "worst_tracking_error_deg": float(np.max(finite))
+                if finite.size
+                else float("nan"),
+                "mean_tracking_error_deg": _mean(values),
+                "grid_point_count": len(values),
+            }
+        )
+    return out
+
+
+def _transition_tracking_diagnostics(
+    method_means_by_motion: list[dict[str, Any]],
+    transition_means: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    transition_lookup = {
+        (row["motion_bin"], row["model"], row["metric"]): row
+        for row in transition_means
+    }
+    out = []
+    for row in method_means_by_motion:
+        method = str(row["method"])
+        if method in {"raw", "persistence"}:
+            continue
+        one_step = transition_lookup.get(
+            (str(row["motion_bin"]), method, "one_step_error_deg")
+        )
+        rollout = transition_lookup.get(
+            (str(row["motion_bin"]), method, "rollout_error_deg")
+        )
+        if one_step is None and rollout is None:
+            continue
+        out.append(
+            {
+                "motion_bin": row["motion_bin"],
+                "method": method,
+                "mean_tracking_error_deg": row["mean_tracking_error_deg"],
+                "sem_tracking_error_deg": row["sem_tracking_error_deg"],
+                "mean_one_step_error_deg": one_step["mean_value"]
+                if one_step
+                else float("nan"),
+                "mean_rollout_error_deg": rollout["mean_value"]
+                if rollout
+                else float("nan"),
+                "tracking_row_count": row["row_count"],
+                "transition_row_count": max(
+                    int(one_step["row_count"]) if one_step else 0,
+                    int(rollout["row_count"]) if rollout else 0,
+                ),
+            }
+        )
     return out
 
 
@@ -345,8 +473,11 @@ def run_motion_stratified_private_accad_eval(
 
     aggregate_metrics_path = out_dir / "aggregate_benchmark_metrics_by_motion_bin.csv"
     aggregate_transition_path = out_dir / "aggregate_transition_metrics_by_motion_bin.csv"
+    aggregate_transition_means_path = out_dir / "aggregate_transition_means_by_motion_bin.csv"
     method_means_by_motion_path = out_dir / "aggregate_method_means_by_motion_bin.csv"
     method_means_by_grid_motion_path = out_dir / "aggregate_method_means_by_noise_occlusion_motion.csv"
+    robustness_summary_path = out_dir / "robustness_summary_by_motion_bin.csv"
+    transition_tracking_diagnostics_path = out_dir / "transition_tracking_diagnostics_by_motion_bin.csv"
     method_means_by_motion = _aggregate_method_means(
         all_metric_rows,
         ("motion_bin", "method"),
@@ -355,10 +486,19 @@ def run_motion_stratified_private_accad_eval(
         all_metric_rows,
         ("motion_bin", "noise_deg", "occlusion_prob", "method"),
     )
+    transition_means_by_motion = _aggregate_transition_means(all_transition_rows)
+    robustness_summary = _robustness_summary(method_means_by_grid_motion)
+    transition_tracking_diagnostics = _transition_tracking_diagnostics(
+        method_means_by_motion,
+        transition_means_by_motion,
+    )
     write_csv(aggregate_metrics_path, all_metric_rows)
     write_csv(aggregate_transition_path, all_transition_rows)
+    write_csv(aggregate_transition_means_path, transition_means_by_motion)
     write_csv(method_means_by_motion_path, method_means_by_motion)
     write_csv(method_means_by_grid_motion_path, method_means_by_grid_motion)
+    write_csv(robustness_summary_path, robustness_summary)
+    write_csv(transition_tracking_diagnostics_path, transition_tracking_diagnostics)
 
     motion_bin_counts = {
         bin_name: len(windows) for bin_name, windows in grouped_windows.items()
@@ -381,11 +521,17 @@ def run_motion_stratified_private_accad_eval(
         "runs": runs,
         "method_means_by_motion_bin": method_means_by_motion,
         "method_means_by_noise_occlusion_motion": method_means_by_grid_motion,
+        "transition_means_by_motion_bin": transition_means_by_motion,
+        "robustness_summary_by_motion_bin": robustness_summary,
+        "transition_tracking_diagnostics_by_motion_bin": transition_tracking_diagnostics,
         "outputs": {
             "aggregate_benchmark_metrics_by_motion_bin": str(aggregate_metrics_path),
             "aggregate_transition_metrics_by_motion_bin": str(aggregate_transition_path),
+            "aggregate_transition_means_by_motion_bin": str(aggregate_transition_means_path),
             "aggregate_method_means_by_motion_bin": str(method_means_by_motion_path),
             "aggregate_method_means_by_noise_occlusion_motion": str(method_means_by_grid_motion_path),
+            "robustness_summary_by_motion_bin": str(robustness_summary_path),
+            "transition_tracking_diagnostics_by_motion_bin": str(transition_tracking_diagnostics_path),
             "markdown_summary": str(out_dir / "motion_stratified_private_accad_eval_summary.md"),
         },
     }

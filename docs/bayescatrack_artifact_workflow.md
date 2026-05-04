@@ -66,6 +66,7 @@ or, if `RUNNER_TOOL_CACHE` is unavailable, under `$RUNNER_TEMP/<cache_subdir>`. 
 An absolute local path is recommended for `ACCAD_DATA_ROOT` because GitHub Actions checks out the repository into a runner work directory that can vary by machine and service configuration. A relative path is still accepted; the workflow resolves it relative to the checked-out repository directory before validating that it exists.
 
 The full-data workflow does not upload raw AMASS/ACCAD `.npz` files or copied motion-bin segment files. It packages only sanitized paper-facing outputs.
+The default full-data config uses balanced motion selection, so the paper-facing artifact should contain low-, medium-, and high-motion ACCAD windows when enough candidates are available.
 
 The full-data workflow uploads an artifact named:
 
@@ -73,7 +74,7 @@ The full-data workflow uploads an artifact named:
 bayescatrack-accad-motion-stratified-full-<run-number>-<sha>
 ```
 
-The sanitized artifact contains aggregate result tables, summary JSON/Markdown files, benchmark summaries, transition metrics, SVG plots, validation metadata, and a redacted `run_manifest.json`.
+The sanitized artifact contains aggregate result tables, statistical summaries, robustness summaries, transition-vs-tracking diagnostics, benchmark summaries, transition metrics, SVG plots, validation metadata, and a redacted `run_manifest.json`.
 
 `run_manifest.json` records the source SHA, workflow run metadata, config hash/content, selected runtime package versions, and output file hashes. For full-data artifacts, local path-like fields are redacted before upload. Keep this manifest beside every paper result snapshot.
 
