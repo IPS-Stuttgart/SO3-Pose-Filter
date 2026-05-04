@@ -28,15 +28,16 @@ cached_only         Use the persistent runner cache and fail if it has not been 
 The default mode is `owncloud_webdav`. Configure these repository or environment secrets:
 
 ```text
+ACCAD_DATA_WEBDAV_URL=<ownCloud public WebDAV endpoint>
 ACCAD_DATA_KEY=<ownCloud public-share token/user>
 ACCAD_DATA_PASSWORD=<ownCloud public-share password>
 ```
 
-The workflow installs `rclone` before checkout, then populates the cache with:
+The workflow installs `rclone`, then populates the cache with:
 
 ```bash
 rclone copy :webdav: ./ACCAD_DATA \
-  --webdav-url 'https://isas-server.iar.kit.edu/owncloud/public.php/webdav/' \
+  --webdav-url "$ACCAD_DATA_WEBDAV_URL" \
   --webdav-vendor owncloud \
   --webdav-user "$ACCAD_DATA_KEY" \
   --webdav-pass "$(rclone obscure "$ACCAD_DATA_PASSWORD")"
