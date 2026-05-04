@@ -6,7 +6,7 @@ import importlib.metadata
 import json
 import os
 import platform
-import subprocess
+import subprocess  # nosec B404
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,7 +50,12 @@ def _sha256_file(path: Path) -> str:
 
 def _git(args: list[str]) -> str | None:
     try:
-        return subprocess.check_output(["git", *args], text=True, stderr=subprocess.DEVNULL).strip()
+        # Query local git metadata with fixed commands for the run manifest.
+        return subprocess.check_output(  # nosec B603 B607
+            ["git", *args],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
 
