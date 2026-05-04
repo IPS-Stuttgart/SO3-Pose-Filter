@@ -129,15 +129,31 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install rclone via pip
+      - name: Install rclone without sudo
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade rclone
           if ! command -v rclone >/dev/null 2>&1; then
-            echo "pip package 'rclone' did not expose a usable rclone binary; installing official binary fallback." >&2
-            mkdir -p "$RUNNER_TEMP/rclone-bin"
-            curl -fsSL https://rclone.org/install.sh | bash -s -- --no-sudo --dest "$RUNNER_TEMP/rclone-bin"
+            mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download"
+            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+            python - <<'PY'
+            import os
+            import shutil
+            import zipfile
+            from pathlib import Path
+
+            temp = Path(os.environ["RUNNER_TEMP"])
+            zip_path = temp / "rclone-download" / "rclone.zip"
+            extract_dir = temp / "rclone-download" / "extract"
+            bin_dir = temp / "rclone-bin"
+            with zipfile.ZipFile(zip_path) as archive:
+                archive.extractall(extract_dir)
+            matches = list(extract_dir.glob("rclone-*/rclone"))
+            if not matches:
+                raise SystemExit("Downloaded rclone archive did not contain rclone binary")
+            target = bin_dir / "rclone"
+            shutil.copy2(matches[0], target)
+            target.chmod(0o755)
+            PY
             echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
             export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
           fi
