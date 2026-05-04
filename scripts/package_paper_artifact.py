@@ -29,8 +29,11 @@ PUBLIC_FILENAMES = {
     "motion_stratified_private_accad_eval_summary.md",
     "aggregate_benchmark_metrics_by_motion_bin.csv",
     "aggregate_transition_metrics_by_motion_bin.csv",
+    "aggregate_transition_means_by_motion_bin.csv",
     "aggregate_method_means_by_motion_bin.csv",
     "aggregate_method_means_by_noise_occlusion_motion.csv",
+    "robustness_summary_by_motion_bin.csv",
+    "transition_tracking_diagnostics_by_motion_bin.csv",
 }
 
 PUBLIC_BENCHMARK_FILENAMES = {

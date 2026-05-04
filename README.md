@@ -121,7 +121,7 @@ python scripts\prepare_amass_windows.py `
   --segment-frames 80 `
   --stride-frames 40 `
   --max-segments 48 `
-  --selection top-motion `
+  --selection balanced-motion `
   --max-per-file 2
 
 python scripts\run_model_sweep.py `
@@ -175,9 +175,21 @@ python scripts\run_private_accad_eval.py `
 ```
 
 `prepare_amass_windows.py` records `motion_deg_per_frame` for every selected segment so results can be
-stratified by motion intensity. CI deliberately uses the same selector with `--max-files 1` and
-`--max-segments 6`, so pull requests exercise the benchmark path without scanning or evaluating a full
-AMASS dataset.
+stratified by motion intensity. Use `--selection balanced-motion` for paper-facing runs that should cover
+low-, medium-, and high-motion windows instead of only the hardest top-motion windows. CI deliberately uses
+the same selector with `--max-files 1` and `--max-segments 6`, so pull requests exercise the benchmark path
+without scanning or evaluating a full AMASS dataset.
+
+The full-data motion-stratified runner writes the paper-facing aggregate tables:
+
+- `aggregate_method_means_by_motion_bin.csv`
+- `aggregate_method_means_by_noise_occlusion_motion.csv`
+- `aggregate_transition_means_by_motion_bin.csv`
+- `robustness_summary_by_motion_bin.csv`
+- `transition_tracking_diagnostics_by_motion_bin.csv`
+
+For the current balanced default, `benchmark_heatmap_method` and `benchmark_acceptance_method` are set to
+`gaussian_rw` because it is the strongest robust baseline in the frozen high-motion artifact.
 
 ## PyRecEst Backend
 
