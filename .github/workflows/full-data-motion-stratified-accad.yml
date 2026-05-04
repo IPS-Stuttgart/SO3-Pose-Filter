@@ -51,10 +51,6 @@ on:
           - secret_path
           - download_and_cache
           - cached_only
-      owncloud_webdav_url:
-        description: ownCloud public WebDAV endpoint.
-        required: true
-        default: https://isas-server.iar.kit.edu/owncloud/public.php/webdav/
       dataset_url:
         description: Optional dataset archive/.npz URL for download_and_cache mode. If empty, secret ACCAD_DATA_URL is used.
         required: false
@@ -91,10 +87,10 @@ jobs:
       PACKAGED_ARTIFACT_DIR: runs/paper_artifact_full_data_motion_stratified
       SECRET_DATA_ROOT: ${{ secrets.ACCAD_DATA_ROOT }}
       SECRET_DATA_URL: ${{ secrets.ACCAD_DATA_URL }}
+      ACCAD_DATA_WEBDAV_URL: ${{ secrets.ACCAD_DATA_WEBDAV_URL }}
       ACCAD_DATA_KEY: ${{ secrets.ACCAD_DATA_KEY }}
       ACCAD_DATA_PASSWORD: ${{ secrets.ACCAD_DATA_PASSWORD }}
       INPUT_DATASET_URL: ${{ inputs.dataset_url }}
-      OWNCLOUD_WEBDAV_URL: ${{ inputs.owncloud_webdav_url }}
       DATA_SOURCE_MODE: ${{ inputs.data_source_mode }}
       CACHE_SUBDIR: ${{ inputs.cache_subdir }}
       FORCE_REDOWNLOAD: ${{ inputs.force_redownload }}
@@ -133,15 +129,31 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install rclone via pip
+      - name: Install rclone without sudo
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade rclone
           if ! command -v rclone >/dev/null 2>&1; then
-            echo "pip package 'rclone' did not expose a usable rclone binary; installing official binary fallback." >&2
-            mkdir -p "$RUNNER_TEMP/rclone-bin"
-            curl -fsSL https://rclone.org/install.sh | bash -s -- --no-sudo --dest "$RUNNER_TEMP/rclone-bin"
+            mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download"
+            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+          python - <<'PY'
+          import os
+          import shutil
+          import zipfile
+          from pathlib import Path
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          zip_path = temp / "rclone-download" / "rclone.zip"
+          extract_dir = temp / "rclone-download" / "extract"
+          bin_dir = temp / "rclone-bin"
+          with zipfile.ZipFile(zip_path) as archive:
+              archive.extractall(extract_dir)
+          matches = list(extract_dir.glob("rclone-*/rclone"))
+          if not matches:
+              raise SystemExit("Downloaded rclone archive did not contain rclone binary")
+          target = bin_dir / "rclone"
+          shutil.copy2(matches[0], target)
+          target.chmod(0o755)
+          PY
             echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
             export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
           fi
@@ -205,11 +217,9 @@ jobs:
           if mode == "owncloud_webdav":
               key = os.environ.get("ACCAD_DATA_KEY", "").strip()
               password = os.environ.get("ACCAD_DATA_PASSWORD", "")
-              webdav_url = os.environ.get("OWNCLOUD_WEBDAV_URL", "").strip()
-              if not key or not password:
-                  raise SystemExit("data_source_mode=owncloud_webdav requires secrets ACCAD_DATA_KEY and ACCAD_DATA_PASSWORD.")
-              if not webdav_url:
-                  raise SystemExit("data_source_mode=owncloud_webdav requires owncloud_webdav_url input.")
+              webdav_url = os.environ.get("ACCAD_DATA_WEBDAV_URL", "").strip()
+              if not key or not password or not webdav_url:
+                  raise SystemExit("data_source_mode=owncloud_webdav requires secrets ACCAD_DATA_WEBDAV_URL, ACCAD_DATA_KEY, and ACCAD_DATA_PASSWORD.")
               target_dir = cache_dir / "ACCAD_DATA"
               target_dir.mkdir(parents=True, exist_ok=True)
               obscured = subprocess.check_output(["rclone", "obscure", password], text=True).strip()
