@@ -194,7 +194,9 @@ def select_windows(
     elif selection == "top-motion":
         ordered = sorted(filtered, key=lambda row: row.motion_deg_per_frame, reverse=True)
     elif selection == "balanced-motion":
-        by_bin = {name: [] for name, _, _ in MOTION_BINS}
+        by_bin: dict[str, list[WindowCandidate]] = {
+            name: [] for name, _, _ in MOTION_BINS
+        }
         for candidate in filtered:
             by_bin[_motion_bin(candidate.motion_deg_per_frame)].append(candidate)
         for name in by_bin:
