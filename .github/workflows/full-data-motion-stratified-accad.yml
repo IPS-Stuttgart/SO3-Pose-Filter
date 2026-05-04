@@ -358,7 +358,7 @@ jobs:
           summary = json.loads(required[0].read_text(encoding="utf-8"))
           assert summary["motion_bin_counts"], "no motion bins were produced"
           assert summary["method_means_by_motion_bin"], "no method means were produced"
-          with required[4].open(newline="", encoding="utf-8") as handle:
+          with required[5].open(newline="", encoding="utf-8") as handle:
               rows = list(csv.DictReader(handle))
           assert rows, "aggregate_method_means_by_motion_bin.csv is empty"
           validation = {
