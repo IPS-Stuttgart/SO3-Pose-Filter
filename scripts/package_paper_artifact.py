@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ SENSITIVE_KEYS = {
     "source_path",
     "target_path",
     "source",
+    "python_executable",
 }
 
 PUBLIC_FILENAMES = {
@@ -85,7 +87,9 @@ def _copy_sanitized_csv(source: Path, target: Path) -> None:
 
 def _copy_text(source: Path, target: Path) -> None:
     text = source.read_text(encoding="utf-8")
-    target.write_text(text.replace("D:/", "<redacted>/").replace("/home/", "<redacted>/"), encoding="utf-8")
+    text = re.sub(r"`(?:[A-Za-z]:[/\\]|/home/|<redacted>/)[^`]*`", "`<redacted>`", text)
+    text = re.sub(r"(?:[A-Za-z]:[/\\]|/home/)\S+", "<redacted>", text)
+    target.write_text(text, encoding="utf-8")
 
 
 def _copy_file(source: Path, target: Path) -> None:
