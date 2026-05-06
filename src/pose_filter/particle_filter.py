@@ -15,6 +15,7 @@ class ParticleFilterResult:
     estimates: np.ndarray
     effective_sample_size: np.ndarray
     resampled: np.ndarray
+    particle_spread_deg: np.ndarray
 
 
 def systematic_resample(weights: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -74,6 +75,11 @@ def _prepare_joint_noise(
     if np.any(~np.isfinite(sigma)) or np.any(sigma <= 0.0):
         raise ValueError("joint_noise_sigma_rad values must be positive and finite")
     return np.maximum(sigma, 1e-8)
+
+
+def _particle_spread_deg(particles: np.ndarray, estimate: np.ndarray) -> float:
+    dist = geodesic_distance(particles, np.asarray(estimate, dtype=np.float64)[None, ...])
+    return float(np.degrees(np.mean(dist)))
 
 
 def initialize_particles(
@@ -138,6 +144,7 @@ def run_particle_filter(
     estimates = []
     ess_values = []
     resampled_flags = []
+    spread_values = []
     particle_history: list[np.ndarray] = []
     history_keep = int(getattr(transition_model, "history_length", 0)) + 1
 
@@ -169,7 +176,8 @@ def run_particle_filter(
                         joint_weights[:, joint_idx],
                     )[0]
                 )
-            estimates.append(np.asarray(estimate))
+            estimate_array = np.asarray(estimate)
+            estimates.append(estimate_array)
             ess_per_joint = 1.0 / np.sum(joint_weights * joint_weights, axis=0)
             ess = float(np.mean(ess_per_joint))
             weights = np.mean(joint_weights, axis=1)
@@ -179,7 +187,9 @@ def run_particle_filter(
             ll = np.sum(joint_ll, axis=-1)
             weights, log_weights = _normalize_log_weights(log_weights + ll)
             ess = float(1.0 / np.sum(weights * weights))
-            estimates.append(chordal_mean(particles, weights))
+            estimate_array = chordal_mean(particles, weights)
+            estimates.append(estimate_array)
+        spread_values.append(_particle_spread_deg(particles, estimate_array))
         ess_values.append(ess)
 
         should_resample = ess < resample_threshold * num_particles
@@ -205,6 +215,7 @@ def run_particle_filter(
         estimates=np.asarray(estimates),
         effective_sample_size=np.asarray(ess_values),
         resampled=np.asarray(resampled_flags, dtype=bool),
+        particle_spread_deg=np.asarray(spread_values, dtype=np.float64),
     )
 
 

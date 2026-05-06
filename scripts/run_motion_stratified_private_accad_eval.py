@@ -20,6 +20,8 @@ from run_first_results_benchmark import run_first_results_benchmark  # noqa: E40
 DEFAULT_METHODS = (
     "raw",
     "persistence",
+    "deterministic_persistence_pf",
+    "noisy_persistence_pf",
     "constant_velocity",
     "gaussian_rw",
     "mlp_delta",
@@ -245,6 +247,70 @@ def _robustness_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _particle_collapse_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups = sorted({(str(row["motion_bin"]), str(row["method"])) for row in rows})
+    out = []
+    for motion_bin, method in groups:
+        method_rows = [
+            row
+            for row in rows
+            if str(row["motion_bin"]) == motion_bin
+            and str(row["method"]) == method
+            and str(row.get("filter_backend", "none")) != "none"
+        ]
+        if not method_rows:
+            continue
+        out.append(
+            {
+                "motion_bin": motion_bin,
+                "method": method,
+                "mean_ess": _mean([float(row["mean_ess"]) for row in method_rows]),
+                "min_ess": _mean([float(row["min_ess"]) for row in method_rows]),
+                "final_ess": _mean([float(row["final_ess"]) for row in method_rows]),
+                "resample_fraction": _mean(
+                    [float(row["resample_fraction"]) for row in method_rows]
+                ),
+                "mean_particle_spread_deg": _mean(
+                    [float(row["mean_particle_spread_deg"]) for row in method_rows]
+                ),
+                "min_particle_spread_deg": _mean(
+                    [float(row["min_particle_spread_deg"]) for row in method_rows]
+                ),
+                "final_particle_spread_deg": _mean(
+                    [float(row["final_particle_spread_deg"]) for row in method_rows]
+                ),
+                "collapse_fraction": _mean(
+                    [float(row["collapse_fraction"]) for row in method_rows]
+                ),
+                "filter_reappeared_joint_error_deg": _mean(
+                    [
+                        float(row["filter_reappeared_joint_error_deg"])
+                        for row in method_rows
+                    ]
+                ),
+                "persistence_reappeared_joint_error_deg": _mean(
+                    [
+                        float(row["persistence_reappeared_joint_error_deg"])
+                        for row in method_rows
+                    ]
+                ),
+                "reappeared_joint_count": _mean(
+                    [float(row["reappeared_joint_count"]) for row in method_rows]
+                ),
+                "row_count": len(method_rows),
+            }
+        )
+    return out
+
+
+def _transition_model_for_method(method: str) -> str:
+    return {
+        "deterministic_persistence_pf": "deterministic_persistence",
+        "noisy_persistence_pf": "noisy_persistence",
+        "pyrecest_pf": "gaussian_rw",
+    }.get(method, method)
+
+
 def _transition_tracking_diagnostics(
     method_means_by_motion: list[dict[str, Any]],
     transition_means: list[dict[str, Any]],
@@ -258,11 +324,12 @@ def _transition_tracking_diagnostics(
         method = str(row["method"])
         if method in {"raw", "persistence"}:
             continue
+        transition_model = _transition_model_for_method(method)
         one_step = transition_lookup.get(
-            (str(row["motion_bin"]), method, "one_step_error_deg")
+            (str(row["motion_bin"]), transition_model, "one_step_error_deg")
         )
         rollout = transition_lookup.get(
-            (str(row["motion_bin"]), method, "rollout_error_deg")
+            (str(row["motion_bin"]), transition_model, "rollout_error_deg")
         )
         if one_step is None and rollout is None:
             continue
@@ -270,6 +337,7 @@ def _transition_tracking_diagnostics(
             {
                 "motion_bin": row["motion_bin"],
                 "method": method,
+                "transition_model": transition_model,
                 "mean_tracking_error_deg": row["mean_tracking_error_deg"],
                 "sem_tracking_error_deg": row["sem_tracking_error_deg"],
                 "mean_one_step_error_deg": one_step["mean_value"]
@@ -477,6 +545,7 @@ def run_motion_stratified_private_accad_eval(
     method_means_by_motion_path = out_dir / "aggregate_method_means_by_motion_bin.csv"
     method_means_by_grid_motion_path = out_dir / "aggregate_method_means_by_noise_occlusion_motion.csv"
     robustness_summary_path = out_dir / "robustness_summary_by_motion_bin.csv"
+    particle_collapse_summary_path = out_dir / "particle_collapse_summary_by_motion_bin.csv"
     transition_tracking_diagnostics_path = out_dir / "transition_tracking_diagnostics_by_motion_bin.csv"
     method_means_by_motion = _aggregate_method_means(
         all_metric_rows,
@@ -488,6 +557,7 @@ def run_motion_stratified_private_accad_eval(
     )
     transition_means_by_motion = _aggregate_transition_means(all_transition_rows)
     robustness_summary = _robustness_summary(method_means_by_grid_motion)
+    particle_collapse_summary = _particle_collapse_summary(all_metric_rows)
     transition_tracking_diagnostics = _transition_tracking_diagnostics(
         method_means_by_motion,
         transition_means_by_motion,
@@ -498,6 +568,7 @@ def run_motion_stratified_private_accad_eval(
     write_csv(method_means_by_motion_path, method_means_by_motion)
     write_csv(method_means_by_grid_motion_path, method_means_by_grid_motion)
     write_csv(robustness_summary_path, robustness_summary)
+    write_csv(particle_collapse_summary_path, particle_collapse_summary)
     write_csv(transition_tracking_diagnostics_path, transition_tracking_diagnostics)
 
     motion_bin_counts = {
@@ -523,6 +594,7 @@ def run_motion_stratified_private_accad_eval(
         "method_means_by_noise_occlusion_motion": method_means_by_grid_motion,
         "transition_means_by_motion_bin": transition_means_by_motion,
         "robustness_summary_by_motion_bin": robustness_summary,
+        "particle_collapse_summary_by_motion_bin": particle_collapse_summary,
         "transition_tracking_diagnostics_by_motion_bin": transition_tracking_diagnostics,
         "outputs": {
             "aggregate_benchmark_metrics_by_motion_bin": str(aggregate_metrics_path),
@@ -531,6 +603,7 @@ def run_motion_stratified_private_accad_eval(
             "aggregate_method_means_by_motion_bin": str(method_means_by_motion_path),
             "aggregate_method_means_by_noise_occlusion_motion": str(method_means_by_grid_motion_path),
             "robustness_summary_by_motion_bin": str(robustness_summary_path),
+            "particle_collapse_summary_by_motion_bin": str(particle_collapse_summary_path),
             "transition_tracking_diagnostics_by_motion_bin": str(transition_tracking_diagnostics_path),
             "markdown_summary": str(out_dir / "motion_stratified_private_accad_eval_summary.md"),
         },

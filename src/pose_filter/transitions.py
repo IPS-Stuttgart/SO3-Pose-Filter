@@ -123,6 +123,63 @@ class PersistenceTransition(TransitionModel):
 
 
 @dataclass
+class NoisyPersistenceTransition(TransitionModel):
+    """Persistence mean with isotropic tangent-space process noise."""
+
+    std_delta: np.ndarray
+
+    name = "noisy_persistence"
+
+    @classmethod
+    def from_sequences(
+        cls,
+        sequences: list[PoseSequence],
+        std_rad: float | None = None,
+        min_std_rad: float = np.radians(0.25),
+        max_std_rad: float | None = None,
+    ) -> "NoisyPersistenceTransition":
+        if not sequences:
+            raise ValueError("need at least one sequence to infer joint shape")
+        num_joints = int(sequences[0].rotations.shape[1])
+        if std_rad is None:
+            if max_std_rad is not None:
+                std = float(max_std_rad)
+            else:
+                std = float(min_std_rad)
+        else:
+            std = max(float(std_rad), float(min_std_rad))
+            if max_std_rad is not None:
+                std = min(std, float(max_std_rad))
+        return cls(std_delta=np.full((num_joints, 3), std, dtype=np.float64))
+
+    def sample_next(
+        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
+    ) -> np.ndarray:
+        x_k = np.asarray(x_k, dtype=np.float64)
+        if n_samples is not None:
+            base = np.repeat(x_k[None, ...], n_samples, axis=0)
+            delta = rng.normal(
+                0.0,
+                self.std_delta,
+                size=(n_samples,) + self.std_delta.shape,
+            )
+            return left_apply_delta(delta, base)
+        delta = rng.normal(0.0, self.std_delta, size=x_k.shape[:-2] + (3,))
+        return left_apply_delta(delta, x_k)
+
+    def deterministic_next(self, x_k: np.ndarray) -> np.ndarray:
+        return np.asarray(x_k, dtype=np.float64).copy()
+
+    def log_prob_next(self, x_next: np.ndarray, x_k: np.ndarray) -> np.ndarray:
+        delta = left_delta(x_k, x_next)
+        z = delta / self.std_delta
+        return -0.5 * np.sum(
+            z * z + np.log(2.0 * np.pi * self.std_delta * self.std_delta),
+            axis=(-1, -2),
+        )
+
+
+@dataclass
 class GaussianRandomWalkTransition(TransitionModel):
     mean_delta: np.ndarray
     std_delta: np.ndarray
@@ -1013,6 +1070,18 @@ def build_transition_model(
     )
     if name == "persistence":
         return PersistenceTransition()
+    if name == "deterministic_persistence":
+        return PersistenceTransition()
+    if name == "noisy_persistence":
+        return NoisyPersistenceTransition.from_sequences(
+            train_sequences,
+            std_rad=(
+                None
+                if config.get("noisy_persistence_process_noise_deg") is None
+                else np.radians(float(config["noisy_persistence_process_noise_deg"]))
+            ),
+            max_std_rad=max_std_rad,
+        )
     if name == "gaussian_rw":
         return GaussianRandomWalkTransition.fit(
             train_sequences, max_std_rad=max_std_rad

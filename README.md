@@ -65,8 +65,8 @@ python scripts\run_model_sweep.py --config configs\example.json --output runs\sw
 ```
 
 Run the first-results benchmark wrapper, which reports raw observations, deterministic persistence,
-Gaussian random-walk particle filters, and the nonlinear current-pose/history MLP transition particle
-filters on one noise/occlusion grid:
+deterministic/noisy persistence particle-filter ablations, Gaussian random-walk particle filters, and the
+nonlinear current-pose/history MLP transition particle filters on one noise/occlusion grid:
 
 ```powershell
 python scripts\run_first_results_benchmark.py `
@@ -186,6 +186,7 @@ The full-data motion-stratified runner writes the paper-facing aggregate tables:
 - `aggregate_method_means_by_noise_occlusion_motion.csv`
 - `aggregate_transition_means_by_motion_bin.csv`
 - `robustness_summary_by_motion_bin.csv`
+- `particle_collapse_summary_by_motion_bin.csv`
 - `transition_tracking_diagnostics_by_motion_bin.csv`
 
 For the current balanced default, `benchmark_heatmap_method` and `benchmark_acceptance_method` are set to
@@ -235,8 +236,10 @@ Useful optional fields:
 - `robustness_noise_deg`
 - `robustness_occlusion_prob`
 - `process_noise_deg`
+- `noisy_persistence_process_noise_deg`
 - `filter_backend`: `numpy` or `pyrecest`
 - `proposal_gain`
+- `collapse_ablation_proposal_gain`
 - `confidence_noise_std`
 - `min_confidence`
 - `smoother_ema_alpha`
@@ -310,7 +313,15 @@ The smoothing baselines are deterministic references:
 
 The experiment outputs include research-oriented diagnostics beyond aggregate pose error:
 observed-vs-occluded joint errors, per-joint errors, and temporal acceleration/jerk metrics for the raw
-measurements, filtered estimate, persistence baseline, and ground truth.
+measurements, filtered estimate, persistence baseline, and ground truth. Particle-filter rows also report
+effective sample size, resampling frequency, particle spread, collapse fraction, and reappeared-joint error
+after occlusion gaps.
+
+`deterministic_persistence_pf` and `noisy_persistence_pf` are ablation methods for checking particle
+collapse. Both use persistence as the transition mean; the deterministic variant has no transition process
+noise, while the noisy variant applies isotropic tangent-space SO(3) process noise controlled by
+`noisy_persistence_process_noise_deg`. Their benchmark runs use `collapse_ablation_proposal_gain`, which
+defaults to zero, so they isolate whether maintaining process noise improves recovery after occlusion.
 
 `ablation_metrics.csv` varies one filter setting at a time around the configured baseline. It reports
 particle-count, proposal-gain, factorized-update, and resampling-threshold rows so experiments can compare

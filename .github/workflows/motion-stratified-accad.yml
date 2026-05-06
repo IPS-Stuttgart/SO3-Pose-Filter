@@ -117,6 +117,7 @@ jobs:
               output_dir / "aggregate_transition_metrics_by_motion_bin.csv",
               output_dir / "aggregate_method_means_by_motion_bin.csv",
               output_dir / "aggregate_method_means_by_noise_occlusion_motion.csv",
+              output_dir / "particle_collapse_summary_by_motion_bin.csv",
           ]
           for path in required:
               assert path.exists(), f"missing required artifact: {path}"
@@ -168,6 +169,7 @@ jobs:
             ${{ inputs.output_dir }}/aggregate_transition_metrics_by_motion_bin.csv
             ${{ inputs.output_dir }}/aggregate_method_means_by_motion_bin.csv
             ${{ inputs.output_dir }}/aggregate_method_means_by_noise_occlusion_motion.csv
+            ${{ inputs.output_dir }}/particle_collapse_summary_by_motion_bin.csv
             ${{ inputs.output_dir }}/benchmarks/**/first_results_summary.json
             ${{ inputs.output_dir }}/benchmarks/**/benchmark_metrics.csv
             ${{ inputs.output_dir }}/benchmarks/**/transition_metrics.csv
