@@ -74,7 +74,7 @@ The full-data workflow uploads an artifact named:
 bayescatrack-accad-motion-stratified-full-<run-number>-<sha>
 ```
 
-The sanitized artifact contains aggregate result tables, statistical summaries, robustness summaries, transition-vs-tracking diagnostics, benchmark summaries, transition metrics, SVG plots, validation metadata, and a redacted `run_manifest.json`.
+The sanitized artifact contains aggregate result tables, statistical summaries, robustness summaries, particle-collapse diagnostics, transition-vs-tracking diagnostics, benchmark summaries, transition metrics, SVG plots, validation metadata, and a redacted `run_manifest.json`.
 
 `run_manifest.json` records the source SHA, workflow run metadata, config hash/content, selected runtime package versions, and output file hashes. For full-data artifacts, local path-like fields are redacted before upload. Keep this manifest beside every paper result snapshot.
 

@@ -19,6 +19,8 @@ from run_first_results_benchmark import run_first_results_benchmark  # noqa: E40
 DEFAULT_METHODS = (
     "raw",
     "persistence",
+    "deterministic_persistence_pf",
+    "noisy_persistence_pf",
     "constant_velocity",
     "gaussian_rw",
     "mlp_delta",

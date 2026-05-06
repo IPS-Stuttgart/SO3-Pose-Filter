@@ -102,8 +102,8 @@ jobs:
       - name: Check repository and invocation context
         run: |
           set -euo pipefail
-          if [ "${{ github.repository }}" != "FlorianPfaff/SO3-Pose-Filter" ]; then
-            echo "This workflow is intended only for FlorianPfaff/SO3-Pose-Filter." >&2
+          if [ "${{ github.repository }}" != "IPS-Stuttgart/SO3-Pose-Filter" ]; then
+            echo "This workflow is intended only for IPS-Stuttgart/SO3-Pose-Filter." >&2
             exit 1
           fi
           if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
@@ -333,6 +333,7 @@ jobs:
               output_dir / "aggregate_method_means_by_motion_bin.csv",
               output_dir / "aggregate_method_means_by_noise_occlusion_motion.csv",
               output_dir / "robustness_summary_by_motion_bin.csv",
+              output_dir / "particle_collapse_summary_by_motion_bin.csv",
               output_dir / "transition_tracking_diagnostics_by_motion_bin.csv",
           ]
           for path in required:

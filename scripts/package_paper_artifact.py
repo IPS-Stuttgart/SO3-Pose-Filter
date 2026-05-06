@@ -35,6 +35,7 @@ PUBLIC_FILENAMES = {
     "aggregate_method_means_by_motion_bin.csv",
     "aggregate_method_means_by_noise_occlusion_motion.csv",
     "robustness_summary_by_motion_bin.csv",
+    "particle_collapse_summary_by_motion_bin.csv",
     "transition_tracking_diagnostics_by_motion_bin.csv",
 }
 

@@ -27,6 +27,8 @@ from pose_filter.transitions import build_transition_model  # noqa: E402
 METHODS = (
     "raw",
     "persistence",
+    "deterministic_persistence_pf",
+    "noisy_persistence_pf",
     "constant_velocity",
     "gaussian_rw",
     "pyrecest_pf",
@@ -80,6 +82,36 @@ def _method_row(
     tracking_error = float(source[tracking_metric])
     raw_error = float(raw_source["observed_error_deg"])
     persistence_error = float(raw_source["persistence_error_deg"])
+    filter_diagnostics = {
+        "mean_ess": float(source.get("mean_ess", float("nan"))),
+        "min_ess": float(source.get("min_ess", float("nan"))),
+        "final_ess": float(source.get("final_ess", float("nan"))),
+        "resample_count": float(source.get("resample_count", float("nan"))),
+        "resample_fraction": float(source.get("resample_fraction", float("nan"))),
+        "mean_particle_spread_deg": float(
+            source.get("mean_particle_spread_deg", float("nan"))
+        ),
+        "min_particle_spread_deg": float(
+            source.get("min_particle_spread_deg", float("nan"))
+        ),
+        "final_particle_spread_deg": float(
+            source.get("final_particle_spread_deg", float("nan"))
+        ),
+        "collapse_fraction": float(source.get("collapse_fraction", float("nan"))),
+        "filter_reappeared_joint_error_deg": float(
+            source.get("filter_reappeared_joint_error_deg", float("nan"))
+        ),
+        "persistence_reappeared_joint_error_deg": float(
+            source.get("persistence_reappeared_joint_error_deg", float("nan"))
+        ),
+        "reappeared_joint_count": float(
+            source.get("reappeared_joint_count", float("nan"))
+        ),
+    }
+    if filter_backend == "none":
+        filter_diagnostics = {
+            key: float("nan") for key in filter_diagnostics
+        }
     return {
         "method": method,
         "noise_deg": float(source["noise_deg"]),
@@ -89,11 +121,11 @@ def _method_row(
         "persistence_error_deg": persistence_error,
         "improvement_vs_raw_deg": raw_error - tracking_error,
         "improvement_vs_persistence_deg": persistence_error - tracking_error,
-        "mean_ess": float(source.get("mean_ess", float("nan"))),
         "transition_model": transition_model,
         "filter_backend": filter_backend,
         "source_metric": tracking_metric,
         "num_particles": int(num_particles),
+        **filter_diagnostics,
     }
 
 
@@ -354,6 +386,60 @@ def run_first_results_benchmark(
         resample_threshold=resample_threshold,
         filter_backend="numpy",
     )
+    collapse_ablation_proposal_gain = float(
+        config.get("collapse_ablation_proposal_gain", 0.0)
+    )
+    deterministic_persistence_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
+    needs_deterministic_persistence_pf = "deterministic_persistence_pf" in methods
+    if needs_deterministic_persistence_pf:
+        deterministic_persistence_model = build_transition_model(
+            "deterministic_persistence",
+            train,
+            config=config,
+        )
+        deterministic_persistence_rows = robustness_rows(
+            test,
+            deterministic_persistence_model,
+            noise_grid,
+            occlusion_grid,
+            num_particles,
+            seed,
+            proposal_gain=collapse_ablation_proposal_gain,
+            confidence_noise_std=confidence_noise_std,
+            min_confidence=min_confidence,
+            factorized_update=factorized_update,
+            resample_threshold=resample_threshold,
+            filter_backend="numpy",
+        )
+        deterministic_persistence_rows_by_key = {
+            _grid_key(row): row for row in deterministic_persistence_rows
+        }
+    noisy_persistence_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
+    needs_noisy_persistence_pf = "noisy_persistence_pf" in methods
+    if needs_noisy_persistence_pf:
+        noisy_persistence_model = build_transition_model(
+            "noisy_persistence",
+            train,
+            process_noise_deg=config.get("process_noise_deg"),
+            config=config,
+        )
+        noisy_persistence_rows = robustness_rows(
+            test,
+            noisy_persistence_model,
+            noise_grid,
+            occlusion_grid,
+            num_particles,
+            seed,
+            proposal_gain=collapse_ablation_proposal_gain,
+            confidence_noise_std=confidence_noise_std,
+            min_confidence=min_confidence,
+            factorized_update=factorized_update,
+            resample_threshold=resample_threshold,
+            filter_backend="numpy",
+        )
+        noisy_persistence_rows_by_key = {
+            _grid_key(row): row for row in noisy_persistence_rows
+        }
     constant_velocity_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
     needs_constant_velocity = "constant_velocity" in methods
     if needs_constant_velocity:
@@ -513,6 +599,30 @@ def run_first_results_benchmark(
                     num_particles,
                 )
             )
+        if "deterministic_persistence_pf" in methods:
+            rows.append(
+                _method_row(
+                    "deterministic_persistence_pf",
+                    deterministic_persistence_rows_by_key[key],
+                    base_row,
+                    "filter_error_deg",
+                    "deterministic_persistence",
+                    "numpy",
+                    num_particles,
+                )
+            )
+        if "noisy_persistence_pf" in methods:
+            rows.append(
+                _method_row(
+                    "noisy_persistence_pf",
+                    noisy_persistence_rows_by_key[key],
+                    base_row,
+                    "filter_error_deg",
+                    "noisy_persistence",
+                    "numpy",
+                    num_particles,
+                )
+            )
         if "constant_velocity" in methods:
             rows.append(
                 _method_row(
@@ -606,6 +716,24 @@ def run_first_results_benchmark(
         test,
         rollout_horizon=int(config.get("rollout_horizon", 10)),
     )
+    if needs_deterministic_persistence_pf:
+        transition_rows.extend(
+            transition_metric_rows(
+                "deterministic_persistence",
+                deterministic_persistence_model,
+                test,
+                rollout_horizon=int(config.get("rollout_horizon", 10)),
+            )
+        )
+    if needs_noisy_persistence_pf:
+        transition_rows.extend(
+            transition_metric_rows(
+                "noisy_persistence",
+                noisy_persistence_model,
+                test,
+                rollout_horizon=int(config.get("rollout_horizon", 10)),
+            )
+        )
     if needs_constant_velocity:
         transition_rows.extend(
             transition_metric_rows(

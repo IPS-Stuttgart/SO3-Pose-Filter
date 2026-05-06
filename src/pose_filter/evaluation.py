@@ -49,6 +49,17 @@ FILTER_SUMMARY_KEYS = [
     "filter_acceleration_error_deg",
     "filter_jerk_error_deg",
     "mean_ess",
+    "min_ess",
+    "final_ess",
+    "resample_count",
+    "resample_fraction",
+    "mean_particle_spread_deg",
+    "min_particle_spread_deg",
+    "final_particle_spread_deg",
+    "collapse_fraction",
+    "filter_reappeared_joint_error_deg",
+    "persistence_reappeared_joint_error_deg",
+    "reappeared_joint_count",
 ]
 
 
@@ -205,6 +216,15 @@ def _per_joint_rows(
     ]
 
 
+def _reappeared_joint_mask(mask: np.ndarray) -> np.ndarray:
+    mask = np.asarray(mask, dtype=bool)
+    if mask.shape[0] < 2:
+        return np.zeros_like(mask, dtype=bool)
+    out = np.zeros_like(mask, dtype=bool)
+    out[1:] = (~mask[:-1]) & mask[1:]
+    return out
+
+
 def evaluate_filter_sequence_artifacts(
     seq: PoseSequence,
     transition_model: TransitionModel,
@@ -251,6 +271,9 @@ def evaluate_filter_sequence_artifacts(
     smoother_estimates = run_baseline_smoothers(
         measurements.observations, measurements.mask, smoother_config
     )
+    reappeared_mask = _reappeared_joint_mask(measurements.mask)
+    collapse_ess_threshold = 0.05 * float(num_particles)
+    collapse_spread_threshold_deg = 0.25
 
     observed_joint_error = observed_error_deg(
         seq.rotations, measurements.observations, measurements.mask
@@ -291,7 +314,26 @@ def evaluate_filter_sequence_artifacts(
             seq.rotations, persistence_estimates, ~measurements.mask
         ),
         "mean_ess": float(np.mean(result.effective_sample_size)),
+        "min_ess": float(np.min(result.effective_sample_size)),
+        "final_ess": float(result.effective_sample_size[-1]),
         "resample_count": int(np.sum(result.resampled)),
+        "resample_fraction": float(np.mean(result.resampled)),
+        "mean_particle_spread_deg": float(np.mean(result.particle_spread_deg)),
+        "min_particle_spread_deg": float(np.min(result.particle_spread_deg)),
+        "final_particle_spread_deg": float(result.particle_spread_deg[-1]),
+        "collapse_fraction": float(
+            np.mean(
+                (result.effective_sample_size <= collapse_ess_threshold)
+                | (result.particle_spread_deg <= collapse_spread_threshold_deg)
+            )
+        ),
+        "filter_reappeared_joint_error_deg": _distance_mean_deg(
+            seq.rotations, result.estimates, reappeared_mask
+        ),
+        "persistence_reappeared_joint_error_deg": _distance_mean_deg(
+            seq.rotations, persistence_estimates, reappeared_mask
+        ),
+        "reappeared_joint_count": int(np.sum(reappeared_mask)),
     }
     for name, estimates in smoother_estimates.items():
         metrics[f"{name}_error_deg"] = mean_joint_distance_deg(seq.rotations, estimates)
@@ -459,8 +501,30 @@ def _mean_row(rows: list[dict]) -> dict:
             np.nanmean([r["smoother_chordal_error_deg"] for r in rows])
         ),
         "mean_ess": float(np.nanmean([r["mean_ess"] for r in rows])),
+        "min_ess": float(np.nanmean([r["min_ess"] for r in rows])),
+        "final_ess": float(np.nanmean([r["final_ess"] for r in rows])),
         "mean_resample_count": float(
             np.nanmean([r["resample_count"] for r in rows])
+        ),
+        "resample_fraction": float(np.nanmean([r["resample_fraction"] for r in rows])),
+        "mean_particle_spread_deg": float(
+            np.nanmean([r["mean_particle_spread_deg"] for r in rows])
+        ),
+        "min_particle_spread_deg": float(
+            np.nanmean([r["min_particle_spread_deg"] for r in rows])
+        ),
+        "final_particle_spread_deg": float(
+            np.nanmean([r["final_particle_spread_deg"] for r in rows])
+        ),
+        "collapse_fraction": float(np.nanmean([r["collapse_fraction"] for r in rows])),
+        "filter_reappeared_joint_error_deg": float(
+            np.nanmean([r["filter_reappeared_joint_error_deg"] for r in rows])
+        ),
+        "persistence_reappeared_joint_error_deg": float(
+            np.nanmean([r["persistence_reappeared_joint_error_deg"] for r in rows])
+        ),
+        "reappeared_joint_count": float(
+            np.nanmean([r["reappeared_joint_count"] for r in rows])
         ),
     }
 
@@ -651,6 +715,38 @@ def robustness_rows(
                         [r["filter_jerk_error_deg"] for r in result_rows]
                     ),
                     "mean_ess": _nanmean([r["mean_ess"] for r in result_rows]),
+                    "min_ess": _nanmean([r["min_ess"] for r in result_rows]),
+                    "final_ess": _nanmean([r["final_ess"] for r in result_rows]),
+                    "resample_count": _nanmean(
+                        [r["resample_count"] for r in result_rows]
+                    ),
+                    "resample_fraction": _nanmean(
+                        [r["resample_fraction"] for r in result_rows]
+                    ),
+                    "mean_particle_spread_deg": _nanmean(
+                        [r["mean_particle_spread_deg"] for r in result_rows]
+                    ),
+                    "min_particle_spread_deg": _nanmean(
+                        [r["min_particle_spread_deg"] for r in result_rows]
+                    ),
+                    "final_particle_spread_deg": _nanmean(
+                        [r["final_particle_spread_deg"] for r in result_rows]
+                    ),
+                    "collapse_fraction": _nanmean(
+                        [r["collapse_fraction"] for r in result_rows]
+                    ),
+                    "filter_reappeared_joint_error_deg": _nanmean(
+                        [r["filter_reappeared_joint_error_deg"] for r in result_rows]
+                    ),
+                    "persistence_reappeared_joint_error_deg": _nanmean(
+                        [
+                            r["persistence_reappeared_joint_error_deg"]
+                            for r in result_rows
+                        ]
+                    ),
+                    "reappeared_joint_count": _nanmean(
+                        [r["reappeared_joint_count"] for r in result_rows]
+                    ),
                 }
             )
     return rows

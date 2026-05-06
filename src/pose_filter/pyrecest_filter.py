@@ -8,6 +8,7 @@ from .particle_filter import (
     ParticleFilterResult,
     _normalize_log_weights,
     _normalize_log_weights_axis0,
+    _particle_spread_deg,
     _prepare_confidence,
     _prepare_joint_noise,
     initialize_particles,
@@ -91,6 +92,7 @@ def run_pyrecest_particle_filter(
     estimates = []
     ess_values = []
     resampled_flags = []
+    spread_values = []
     particle_history: list[np.ndarray] = []
     history_keep = int(getattr(transition_model, "history_length", 0)) + 1
 
@@ -127,7 +129,8 @@ def run_pyrecest_particle_filter(
                         joint_weights[:, joint_idx],
                     )[0]
                 )
-            estimates.append(np.asarray(estimate))
+            estimate_array = np.asarray(estimate)
+            estimates.append(estimate_array)
             ess_per_joint = 1.0 / np.sum(joint_weights * joint_weights, axis=0)
             ess = float(np.mean(ess_per_joint))
             weights = np.mean(joint_weights, axis=1)
@@ -143,8 +146,10 @@ def run_pyrecest_particle_filter(
                 _as_numpy(filter_state.particles), weights=weights
             )
             ess = float(np.asarray(filter_state.effective_sample_size()))
-            estimates.append(quaternions_to_rotations(_as_numpy(filter_state.mean())))
+            estimate_array = quaternions_to_rotations(_as_numpy(filter_state.mean()))
+            estimates.append(estimate_array)
 
+        spread_values.append(_particle_spread_deg(particles, estimate_array))
         ess_values.append(ess)
         should_resample = ess < resample_threshold * num_particles
         resampled_flags.append(should_resample)
@@ -173,4 +178,5 @@ def run_pyrecest_particle_filter(
         estimates=np.asarray(estimates),
         effective_sample_size=np.asarray(ess_values),
         resampled=np.asarray(resampled_flags, dtype=bool),
+        particle_spread_deg=np.asarray(spread_values, dtype=np.float64),
     )

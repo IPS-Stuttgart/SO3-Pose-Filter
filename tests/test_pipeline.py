@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import tempfile
 import unittest
@@ -24,6 +25,7 @@ from pose_filter.transitions import (
     HistoryMLPDeltaTransition,
     LearnedDeltaTransition,
     MLPDeltaTransition,
+    NoisyPersistenceTransition,
     PersistenceTransition,
     is_torch_available,
 )
@@ -139,21 +141,48 @@ class PipelineTests(unittest.TestCase):
                     "max_sequences": 4,
                     "min_frames": 10,
                     "process_noise_deg": 3.0,
+                    "noisy_persistence_process_noise_deg": 2.0,
                     "proposal_gain": 0.2,
+                    "collapse_ablation_proposal_gain": 0.0,
                     "factorized_update": True,
                     "resample_threshold": 0.5,
                 },
                 output_dir,
-                methods=("raw", "persistence", "gaussian_rw"),
+                methods=(
+                    "raw",
+                    "persistence",
+                    "deterministic_persistence_pf",
+                    "noisy_persistence_pf",
+                    "gaussian_rw",
+                ),
                 noise_grid=[5.0],
                 occlusion_grid=[0.0, 0.5],
             )
 
-            self.assertEqual(summary["row_count"], 6)
+            self.assertEqual(summary["row_count"], 10)
             self.assertEqual(
-                set(summary["means_by_method"]), {"raw", "persistence", "gaussian_rw"}
+                set(summary["means_by_method"]),
+                {
+                    "raw",
+                    "persistence",
+                    "deterministic_persistence_pf",
+                    "noisy_persistence_pf",
+                    "gaussian_rw",
+                },
             )
             self.assertTrue((output_dir / "benchmark_metrics.csv").exists())
+            with (output_dir / "benchmark_metrics.csv").open(
+                newline="",
+                encoding="utf-8",
+            ) as handle:
+                metric_rows = list(csv.DictReader(handle))
+            self.assertIn("collapse_fraction", metric_rows[0])
+            self.assertIn("mean_particle_spread_deg", metric_rows[0])
+            self.assertIn(
+                "deterministic_persistence_pf",
+                {row["method"] for row in metric_rows},
+            )
+            self.assertIn("noisy_persistence_pf", {row["method"] for row in metric_rows})
             self.assertTrue((output_dir / "first_results_summary.json").exists())
             self.assertTrue(
                 (output_dir / "plots" / "tracking_error_heatmap.svg").exists()
@@ -312,6 +341,10 @@ class PipelineTests(unittest.TestCase):
             train, _, test = split_sequences(seqs, seed=3)
             models = [
                 PersistenceTransition(),
+                NoisyPersistenceTransition.from_sequences(
+                    train,
+                    std_rad=np.radians(2.0),
+                ),
                 GaussianRandomWalkTransition.fit(train),
                 LearnedDeltaTransition.fit(train),
                 MLPDeltaTransition.fit(train, hidden_dim=12, epochs=3, seed=5),
@@ -346,6 +379,10 @@ class PipelineTests(unittest.TestCase):
                     resample_threshold=0.75,
                 )
                 self.assertEqual(result.estimates.shape, test[0].rotations.shape)
+                self.assertEqual(
+                    result.particle_spread_deg.shape,
+                    result.effective_sample_size.shape,
+                )
             rows = ablation_rows(
                 test,
                 models[1],
@@ -475,6 +512,13 @@ class PipelineTests(unittest.TestCase):
             self.assertIn("filter_occluded_joint_error_deg", artifacts.metrics)
             self.assertIn("filter_acceleration_deg", artifacts.metrics)
             self.assertIn("filter_jerk_error_deg", artifacts.metrics)
+            self.assertIn("min_ess", artifacts.metrics)
+            self.assertIn("final_ess", artifacts.metrics)
+            self.assertIn("resample_fraction", artifacts.metrics)
+            self.assertIn("mean_particle_spread_deg", artifacts.metrics)
+            self.assertIn("collapse_fraction", artifacts.metrics)
+            self.assertIn("filter_reappeared_joint_error_deg", artifacts.metrics)
+            self.assertIn("reappeared_joint_count", artifacts.metrics)
             self.assertEqual(len(artifacts.per_joint_rows), 23)
             self.assertEqual(
                 {row["estimate"] for row in artifacts.temporal_rows},

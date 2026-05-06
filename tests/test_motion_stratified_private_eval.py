@@ -49,6 +49,8 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
                     "benchmark_methods": [
                         "raw",
                         "persistence",
+                        "deterministic_persistence_pf",
+                        "noisy_persistence_pf",
                         "constant_velocity",
                         "gaussian_rw",
                     ],
@@ -61,7 +63,9 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
                     "val_fraction": 0.25,
                     "rollout_horizon": 5,
                     "process_noise_deg": 3.0,
+                    "noisy_persistence_process_noise_deg": 2.0,
                     "proposal_gain": 0.2,
+                    "collapse_ablation_proposal_gain": 0.0,
                     "factorized_update": True,
                     "resample_threshold": 0.5,
                 }
@@ -73,6 +77,7 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
             self.assertIn("high_motion", summary["motion_bin_counts"])
             self.assertTrue(summary["method_means_by_motion_bin"])
             self.assertTrue(summary["robustness_summary_by_motion_bin"])
+            self.assertTrue(summary["particle_collapse_summary_by_motion_bin"])
             self.assertTrue(summary["transition_tracking_diagnostics_by_motion_bin"])
             self.assertTrue(
                 (output_dir / "aggregate_benchmark_metrics_by_motion_bin.csv").exists()
@@ -94,6 +99,9 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
             )
             self.assertTrue(
                 (output_dir / "robustness_summary_by_motion_bin.csv").exists()
+            )
+            self.assertTrue(
+                (output_dir / "particle_collapse_summary_by_motion_bin.csv").exists()
             )
             self.assertTrue(
                 (
