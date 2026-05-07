@@ -1,0 +1,11 @@
+# Pinned development/build/test toolchain for local reproducibility.
+# Runtime dependencies stay declared in pyproject.toml.
+-e .
+black==25.1.0
+build==1.2.2.post1
+mypy==1.15.0
+pylint==3.3.4
+pytest==8.3.5
+pytest-cov==6.0.0
+ruff==0.9.10
+twine==6.1.0

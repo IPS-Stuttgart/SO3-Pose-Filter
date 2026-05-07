@@ -9,8 +9,13 @@ on:
       - "src/pose_filter/**"
       - "scripts/**"
       - "tests/**"
+      - "docs/**"
       - "pyproject.toml"
       - "README.md"
+      - "CITATION.cff"
+      - "LICENSE"
+      - "MANIFEST.in"
+      - "requirements-dev.txt"
       - ".github/workflows/so3-pose-filter-ci.yml"
   pull_request:
     paths:
@@ -18,8 +23,13 @@ on:
       - "src/pose_filter/**"
       - "scripts/**"
       - "tests/**"
+      - "docs/**"
       - "pyproject.toml"
       - "README.md"
+      - "CITATION.cff"
+      - "LICENSE"
+      - "MANIFEST.in"
+      - "requirements-dev.txt"
       - ".github/workflows/so3-pose-filter-ci.yml"
   workflow_dispatch:
 
@@ -48,10 +58,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install runtime dependencies
+      - name: Build and install package
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+          python -m pip install --upgrade pip build
+          python -m build
+          python -m pip install dist/*.whl
 
       - name: Run unit tests
         run: python -m unittest discover -s tests

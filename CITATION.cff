@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+title: "SO(3)^K Motion Filtering Prototype"
+abstract: "Prototype for recursive Bayesian filtering of local SMPL body-joint rotations on SO(3)^K."
+authors:
+  - family-names: "Pfaff"
+    given-names: "Florian"
+repository-code: "https://github.com/IPS-Stuttgart/SO3-Pose-Filter"
+url: "https://github.com/IPS-Stuttgart/SO3-Pose-Filter"
+version: "0.1.0"
+license: "MIT"
+keywords:
+  - "SO(3)"
+  - "Bayesian filtering"
+  - "particle filter"
+  - "human motion"
+  - "SMPL"
+  - "AMASS"
