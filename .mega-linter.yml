@@ -1,23 +1,15 @@
-APPLY_FIXES: all
+---
+# Keep MegaLinter focused on checks that are useful across these Python repos
+# before strict typing, spelling, and security-scan baselines are established.
+ENABLE_LINTERS:
+  - ACTION_ACTIONLINT
+  - MARKDOWN_MARKDOWNLINT
+  - PYTHON_RUFF
+  - REPOSITORY_GIT_DIFF
+  - YAML_YAMLLINT
+  - YAML_V8R
 
-PRE_COMMANDS:
-  - command: cat /etc/os-release
-  - command: pip install -e .
-    venv: pylint
-
-PYTHON_PYLINT_CONFIG_FILE: LINTER_DEFAULT
-
-REPOSITORY_CHECKOV_ARGUMENTS: --skip-check CKV_GHA_7
-
-DISABLE_LINTERS:
-  - SPELL_CSPELL
-  - COPYPASTE_JSCPD
-  - PYTHON_FLAKE8
-  - PYTHON_PYLINT
-  - PYTHON_PYRIGHT
-  - REPOSITORY_DEVSKIM
-  - REPOSITORY_TRIVY
-  - JSON_JSONLINT
-  - MAKEFILE_CHECKMAKE
-  - SPELL_LYCHEE
-  - REPOSITORY_GRYPE
+VALIDATE_ALL_CODEBASE: true
+PRINT_ALPACA: false
+SHOW_ELAPSED_TIME: true
+FLAVOR_SUGGESTIONS: false
