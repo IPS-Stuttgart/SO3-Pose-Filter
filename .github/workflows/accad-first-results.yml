@@ -59,10 +59,14 @@ jobs:
 
       - name: Download ACCAD AMASS sample
         run: |
-          python scripts/download_accad_webdav_sample.py \
+          python scripts/download_webdav_amass_sample.py \
             --output-dir data/accad_secret_sample \
             --report runs/accad_first_results_download_report.json \
-            --max-files 1
+            --max-files 1 \
+            --webdav-url-env ACCAD_DATA_WEBDAV_URL \
+            --key-env ACCAD_DATA_KEY \
+            --password-env ACCAD_DATA_PASSWORD \
+            --source-name ACCAD_DATA_WEBDAV_URL
 
       - name: Build benchmark sequence chunks
         run: |

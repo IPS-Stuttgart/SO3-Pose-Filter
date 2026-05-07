@@ -108,10 +108,14 @@ jobs:
         if: ${{ inputs.download_sample == true || inputs.download_sample == 'true' }}
         run: |
           mkdir -p "$DATA_ROOT" runs
-          python scripts/download_accad_webdav_sample.py \
+          python scripts/download_webdav_amass_sample.py \
             --output-dir "$DATA_ROOT" \
             --report runs/motion_stratified_download_report.json \
-            --max-files "${{ inputs.sample_file_count }}"
+            --max-files "${{ inputs.sample_file_count }}" \
+            --webdav-url-env ACCAD_DATA_WEBDAV_URL \
+            --key-env ACCAD_DATA_KEY \
+            --password-env ACCAD_DATA_PASSWORD \
+            --source-name ACCAD_DATA_WEBDAV_URL
 
       - name: Run motion-stratified private ACCAD evaluation
         run: |

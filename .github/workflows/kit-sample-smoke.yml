@@ -1,4 +1,4 @@
-name: ACCAD AMASS Sample Smoke
+name: KIT AMASS Sample Smoke
 
 on:
   pull_request:
@@ -12,13 +12,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  accad-sample-smoke:
-    name: Download ACCAD sample and run smoke experiment
+  kit-sample-smoke:
+    name: Download KIT sample and run smoke experiment
     runs-on: ubuntu-latest
     env:
-      ACCAD_DATA_WEBDAV_URL: ${{ secrets.ACCAD_DATA_WEBDAV_URL }}
-      ACCAD_DATA_KEY: ${{ secrets.ACCAD_DATA_KEY }}
-      ACCAD_DATA_PASSWORD: ${{ secrets.ACCAD_DATA_PASSWORD }}
+      KIT_WEBDAV_URL: ${{ secrets.KIT_WEBDAV_URL }}
+      KIT_DATA_KEY: ${{ secrets.KIT_DATA_KEY }}
+      KIT_DATA_PASSWORD: ${{ secrets.KIT_DATA_PASSWORD }}
 
     steps:
       - name: Check out repository
@@ -56,16 +56,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
 
-      - name: Download and validate ACCAD AMASS sample
+      - name: Download and validate KIT AMASS sample
         run: |
           python scripts/download_webdav_amass_sample.py \
-            --output-dir data/accad_secret_sample \
-            --report runs/accad_sample_download_report.json \
+            --output-dir data/kit_secret_sample \
+            --report runs/kit_sample_download_report.json \
             --max-files 1 \
-            --webdav-url-env ACCAD_DATA_WEBDAV_URL \
-            --key-env ACCAD_DATA_KEY \
-            --password-env ACCAD_DATA_PASSWORD \
-            --source-name ACCAD_DATA_WEBDAV_URL
+            --webdav-url-env KIT_WEBDAV_URL \
+            --key-env KIT_DATA_KEY \
+            --password-env KIT_DATA_PASSWORD \
+            --source-name KIT_WEBDAV_URL
 
       - name: Build trimmed smoke subset and config
         run: |
@@ -77,8 +77,8 @@ jobs:
 
           import numpy as np
 
-          source = Path("data/accad_secret_sample/sample.npz")
-          trimmed_dir = Path("data/accad_secret_sample_trimmed")
+          source = Path("data/kit_secret_sample/sample.npz")
+          trimmed_dir = Path("data/kit_secret_sample_trimmed")
           trimmed_dir.mkdir(parents=True, exist_ok=True)
           trimmed = trimmed_dir / "sample_trimmed.npz"
 
@@ -104,8 +104,8 @@ jobs:
               "num_particles": 96,
               "transition_model": "persistence",
               "filter_backend": "numpy",
-              "output_dir": "runs/accad_sample",
-              "seed": 11,
+              "output_dir": "runs/kit_sample",
+              "seed": 23,
               "max_sequences": 1,
               "min_frames": 2,
               "train_fraction": 1.0,
@@ -116,27 +116,27 @@ jobs:
               "process_noise_deg": 3.0,
               "proposal_gain": 0.2,
           }
-          Path("runs/accad_sample_config.json").write_text(
+          Path("runs/kit_sample_config.json").write_text(
               json.dumps(config, indent=2),
               encoding="utf-8",
           )
           print(json.dumps({"trimmed_frames": n_frames, "config": config}, indent=2))
           PY
 
-      - name: Run ACCAD sample smoke experiment
+      - name: Run KIT sample smoke experiment
         run: |
-          python scripts/run_experiment.py --config runs/accad_sample_config.json
+          python scripts/run_experiment.py --config runs/kit_sample_config.json
 
-      - name: Validate ACCAD smoke outputs
+      - name: Validate KIT smoke outputs
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
 
-          summary_path = Path("runs/accad_sample/summary.json")
-          report_path = Path("runs/accad_sample_download_report.json")
+          summary_path = Path("runs/kit_sample/summary.json")
+          report_path = Path("runs/kit_sample_download_report.json")
 
-          assert summary_path.exists(), "missing ACCAD smoke summary"
+          assert summary_path.exists(), "missing KIT smoke summary"
           assert report_path.exists(), "missing download report"
 
           summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -145,21 +145,21 @@ jobs:
 
           assert summary["num_joints"] == 23
           assert summary["num_sequences"] == 1
-          assert report["source"] == "ACCAD_DATA_WEBDAV_URL"
+          assert report["source"] == "KIT_WEBDAV_URL"
           assert report["files"][0]["metadata"]["poses_shape"][1] >= 72
           assert means["filter_error_deg"] >= 0.0
           assert means["observed_error_deg"] >= 0.0
 
-          print("ACCAD smoke summary:", means)
+          print("KIT smoke summary:", means)
           PY
 
-      - name: Upload ACCAD smoke artifacts
+      - name: Upload KIT smoke artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: accad-amass-smoke-results
+          name: kit-amass-smoke-results
           path: |
-            runs/accad_sample_download_report.json
-            runs/accad_sample_config.json
-            runs/accad_sample/summary.json
-            runs/accad_sample/*.csv
-            runs/accad_sample/plots/*.svg
+            runs/kit_sample_download_report.json
+            runs/kit_sample_config.json
+            runs/kit_sample/summary.json
+            runs/kit_sample/*.csv
+            runs/kit_sample/plots/*.svg

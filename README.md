@@ -109,6 +109,11 @@ configured moderate noise/occlusion setting. The benchmark workflow is intention
 downloaded sample, at most six selected windows, and four benchmark grid points so pull requests do not scan
 or evaluate a full AMASS dataset.
 
+The KIT sample smoke workflow uses the same rclone/WebDAV downloader with the `KIT_WEBDAV_URL`,
+`KIT_DATA_KEY`, and `KIT_DATA_PASSWORD` secrets. It copies one bounded KIT AMASS `*_poses.npz` file, trims it
+for a cheap smoke experiment, and validates the standard SO(3) filtering path. This gives every PR a small
+second-dataset check without downloading or evaluating the full KIT motion dataset.
+
 For a local ACCAD run on a full dataset checkout, first select a bounded set of dynamic windows and then
 run the dynamic benchmark config:
 
