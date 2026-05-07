@@ -1,0 +1,396 @@
+name: Full-Data KIT Motion-Stratified Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      config_path:
+        description: Config JSON for the full-data KIT run.
+        required: true
+        default: configs/private_kit_eval.example.json
+      output_dir:
+        description: Local output directory on the self-hosted runner.
+        required: true
+        default: runs/full_data_motion_stratified_private_kit_eval
+      artifact_name_prefix:
+        description: Prefix for the sanitized public paper artifact.
+        required: true
+        default: bayescatrack-kit-motion-stratified-full
+      artifact_retention_days:
+        description: Number of days to retain the uploaded artifact.
+        required: true
+        default: "90"
+      max_hash_mb:
+        description: Maximum file size in MB for SHA-256 hashing in run_manifest.json.
+        required: true
+        default: "100"
+      run_tests_first:
+        description: Run lightweight tests before the full benchmark.
+        required: true
+        type: boolean
+        default: true
+      clean_output_dir:
+        description: Remove output_dir before running.
+        required: true
+        type: boolean
+        default: true
+      torch_device:
+        description: Device override for config patching. Use auto, cpu, or cuda.
+        required: true
+        default: auto
+      max_segments_override:
+        description: Optional integer override for max_segments. Leave empty to use config.
+        required: false
+        default: ""
+      data_source_mode:
+        description: "Data source: owncloud_webdav, secret_path, download_and_cache, or cached_only."
+        required: true
+        default: owncloud_webdav
+        type: choice
+        options:
+          - owncloud_webdav
+          - secret_path
+          - download_and_cache
+          - cached_only
+      dataset_url:
+        description: Optional dataset archive/.npz URL for download_and_cache mode. If empty, secret KIT_DATA_URL is used.
+        required: false
+        default: ""
+      cache_subdir:
+        description: Persistent subdirectory below the runner tool cache/temp/cache root.
+        required: true
+        default: so3-pose-filter/kit-full-data
+      force_redownload:
+        description: Redownload and replace cached data even if cache marker exists.
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: full-data-motion-stratified-kit
+  cancel-in-progress: false
+
+jobs:
+  full-data-motion-stratified-kit:
+    name: Full-data private KIT benchmark on self-hosted runner
+    runs-on: [self-hosted]
+    timeout-minutes: 4320
+    env:
+      CONFIG_PATH: ${{ inputs.config_path }}
+      OUTPUT_DIR: ${{ inputs.output_dir }}
+      PACKAGED_ARTIFACT_DIR: runs/paper_artifact_full_data_motion_stratified_kit
+      SECRET_DATA_ROOT: ${{ secrets.KIT_DATA_ROOT }}
+      SECRET_DATA_URL: ${{ secrets.KIT_DATA_URL }}
+      KIT_WEBDAV_URL: ${{ secrets.KIT_WEBDAV_URL }}
+      KIT_DATA_KEY: ${{ secrets.KIT_DATA_KEY }}
+      KIT_DATA_PASSWORD: ${{ secrets.KIT_DATA_PASSWORD }}
+      INPUT_DATASET_URL: ${{ inputs.dataset_url }}
+      DATA_SOURCE_MODE: ${{ inputs.data_source_mode }}
+      CACHE_SUBDIR: ${{ inputs.cache_subdir }}
+      FORCE_REDOWNLOAD: ${{ inputs.force_redownload }}
+      TORCH_DEVICE: ${{ inputs.torch_device }}
+      MAX_SEGMENTS_OVERRIDE: ${{ inputs.max_segments_override }}
+      MAX_HASH_MB: ${{ inputs.max_hash_mb }}
+
+    steps:
+      - name: Check repository and invocation context
+        run: |
+          set -euo pipefail
+          if [ "${{ github.repository }}" != "IPS-Stuttgart/SO3-Pose-Filter" ]; then
+            echo "This workflow is intended only for IPS-Stuttgart/SO3-Pose-Filter." >&2
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "This workflow is manual-only." >&2
+            exit 1
+          fi
+          case "${TORCH_DEVICE}" in
+            auto|cpu|cuda) ;;
+            *) echo "torch_device must be auto, cpu, or cuda." >&2; exit 1 ;;
+          esac
+          case "${DATA_SOURCE_MODE}" in
+            owncloud_webdav|secret_path|download_and_cache|cached_only) ;;
+            *) echo "data_source_mode must be owncloud_webdav, secret_path, download_and_cache, or cached_only." >&2; exit 1 ;;
+          esac
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install rclone without sudo
+        run: |
+          set -euo pipefail
+          if ! command -v rclone >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
+            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+              -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+            python -m zipfile -e \
+              "$RUNNER_TEMP/rclone-download/rclone.zip" \
+              "$RUNNER_TEMP/rclone-download/extract"
+            RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
+            if [ -z "$RCLONE_BIN" ]; then
+              echo "Downloaded rclone archive did not contain rclone binary" >&2
+              exit 1
+            fi
+            cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
+            chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
+            echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+            export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+          fi
+          rclone version
+
+      - name: Resolve or populate private data root
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import shutil
+          import subprocess
+          import urllib.request
+          import zipfile
+          from pathlib import Path
+
+          mode = os.environ["DATA_SOURCE_MODE"]
+          force = os.environ.get("FORCE_REDOWNLOAD", "false").lower() == "true"
+          cache_base = Path(os.environ.get("RUNNER_TOOL_CACHE") or os.environ.get("RUNNER_TEMP") or (Path.home() / ".cache"))
+          cache_dir = (cache_base / os.environ["CACHE_SUBDIR"]).expanduser().resolve()
+          marker = cache_dir / ".so3_pose_filter_dataset_ready"
+
+          def find_dataset_root(root: Path) -> Path:
+              if any(root.rglob("*.npz")):
+                  return root
+              children = [child for child in root.iterdir() if child.is_dir()]
+              if len(children) == 1 and any(children[0].rglob("*.npz")):
+                  return children[0]
+              raise SystemExit(f"Downloaded/cache directory contains no .npz files: {root}")
+
+          def write_env(data_root: Path) -> None:
+              with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+                  handle.write(f"DATA_ROOT_ABS={data_root}\n")
+                  handle.write(f"DATA_CACHE_DIR={cache_dir}\n")
+              print(f"Using dataset root: {data_root}")
+              print(f"Persistent cache directory: {cache_dir}")
+
+          if mode == "secret_path":
+              raw = os.environ.get("SECRET_DATA_ROOT", "").strip()
+              if not raw:
+                  raise SystemExit("data_source_mode=secret_path requires secret KIT_DATA_ROOT.")
+              path = Path(raw).expanduser()
+              if not path.is_absolute():
+                  path = (Path.cwd() / path).resolve()
+              if not path.is_dir():
+                  raise SystemExit(f"Configured data root does not exist on this runner after resolution: {path}")
+              write_env(path)
+              raise SystemExit(0)
+
+          if marker.exists() and not force:
+              write_env(find_dataset_root(cache_dir))
+              raise SystemExit(0)
+
+          if mode == "cached_only":
+              raise SystemExit(f"No ready cached dataset found at {cache_dir}. Run once with data_source_mode=owncloud_webdav or download_and_cache.")
+
+          if cache_dir.exists():
+              shutil.rmtree(cache_dir)
+          cache_dir.mkdir(parents=True, exist_ok=True)
+
+          if mode == "owncloud_webdav":
+              key = os.environ.get("KIT_DATA_KEY", "").strip()
+              password = os.environ.get("KIT_DATA_PASSWORD", "")
+              webdav_url = os.environ.get("KIT_WEBDAV_URL", "").strip()
+              if not key or not password or not webdav_url:
+                  raise SystemExit("data_source_mode=owncloud_webdav requires secrets KIT_WEBDAV_URL, KIT_DATA_KEY, and KIT_DATA_PASSWORD.")
+              target_dir = cache_dir / "KIT_DATA"
+              target_dir.mkdir(parents=True, exist_ok=True)
+              obscured = subprocess.check_output(["rclone", "obscure", password], text=True).strip()
+              subprocess.check_call([
+                  "rclone",
+                  "copy",
+                  ":webdav:",
+                  str(target_dir),
+                  "--webdav-url",
+                  webdav_url,
+                  "--webdav-vendor",
+                  "owncloud",
+                  "--webdav-user",
+                  key,
+                  "--webdav-pass",
+                  obscured,
+                  "--progress",
+              ])
+              data_root = find_dataset_root(target_dir)
+          else:
+              url = os.environ.get("INPUT_DATASET_URL", "").strip() or os.environ.get("SECRET_DATA_URL", "").strip()
+              if not url:
+                  raise SystemExit("download_and_cache requires either workflow input dataset_url or secret KIT_DATA_URL.")
+              download_path = cache_dir / "downloaded_dataset"
+              request = urllib.request.Request(url, headers={"User-Agent": "SO3-Pose-Filter-full-kit-data-workflow/1.0"})
+              with urllib.request.urlopen(request, timeout=1800) as response:
+                  with download_path.open("wb") as handle:
+                      shutil.copyfileobj(response, handle)
+              if zipfile.is_zipfile(download_path):
+                  extract_dir = cache_dir / "extracted"
+                  extract_dir.mkdir(parents=True, exist_ok=True)
+                  with zipfile.ZipFile(download_path) as archive:
+                      archive.extractall(extract_dir)
+                  data_root = find_dataset_root(extract_dir)
+              else:
+                  single_dir = cache_dir / "single_npz"
+                  single_dir.mkdir(parents=True, exist_ok=True)
+                  shutil.move(str(download_path), single_dir / "sample.npz")
+                  data_root = find_dataset_root(single_dir)
+
+          marker.write_text(f"data_root={data_root}\n", encoding="utf-8")
+          write_env(data_root)
+          PY
+
+      - name: Install package, Torch extras, and PyRecEst main
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[torch]"
+          python -m pip install --upgrade "git+https://github.com/FlorianPfaff/PyRecEst.git@main"
+
+      - name: Run lightweight tests first
+        if: ${{ inputs.run_tests_first == true || inputs.run_tests_first == 'true' }}
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests
+
+      - name: Prepare full-data KIT config
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          config_path = Path(os.environ["CONFIG_PATH"])
+          config = json.loads(config_path.read_text(encoding="utf-8"))
+          config["dataset_name"] = "KIT"
+          config["source_data_root"] = os.environ["DATA_ROOT_ABS"]
+          config["output_dir"] = os.environ["OUTPUT_DIR"]
+          config["gru_device"] = os.environ["TORCH_DEVICE"]
+          override = os.environ.get("MAX_SEGMENTS_OVERRIDE", "").strip()
+          if override:
+              config["max_segments"] = int(override)
+          prepared = Path("runs/full_data_motion_stratified_kit_config.json")
+          prepared.parent.mkdir(parents=True, exist_ok=True)
+          prepared.write_text(json.dumps(config, indent=2), encoding="utf-8")
+          print(json.dumps({
+              "prepared_config": str(prepared),
+              "dataset_name": config.get("dataset_name"),
+              "output_dir": os.environ["OUTPUT_DIR"],
+              "max_segments": config.get("max_segments"),
+              "benchmark_methods": config.get("benchmark_methods"),
+              "benchmark_seeds": config.get("benchmark_seeds"),
+              "benchmark_num_particles": config.get("benchmark_num_particles"),
+              "benchmark_noise_deg": config.get("benchmark_noise_deg"),
+              "benchmark_occlusion_prob": config.get("benchmark_occlusion_prob"),
+              "gru_device": config.get("gru_device"),
+              "data_source_mode": os.environ["DATA_SOURCE_MODE"],
+              "data_cache_dir": os.environ.get("DATA_CACHE_DIR", ""),
+          }, indent=2))
+          PY
+
+      - name: Clean previous outputs
+        if: ${{ inputs.clean_output_dir == true || inputs.clean_output_dir == 'true' }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          for key in ["OUTPUT_DIR", "PACKAGED_ARTIFACT_DIR"]:
+              path = Path(os.environ[key])
+              if path.exists():
+                  shutil.rmtree(path)
+          PY
+
+      - name: Run full-data KIT motion-stratified evaluation
+        run: |
+          set -euo pipefail
+          python scripts/run_motion_stratified_private_accad_eval.py \
+            --config runs/full_data_motion_stratified_kit_config.json \
+            --data-root "$DATA_ROOT_ABS" \
+            --output "$OUTPUT_DIR"
+
+      - name: Validate full-data KIT outputs
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import json
+          import os
+          from pathlib import Path
+
+          output_dir = Path(os.environ["OUTPUT_DIR"])
+          required = [
+              output_dir / "motion_stratified_private_accad_eval_summary.json",
+              output_dir / "motion_stratified_private_accad_eval_summary.md",
+              output_dir / "aggregate_benchmark_metrics_by_motion_bin.csv",
+              output_dir / "aggregate_transition_metrics_by_motion_bin.csv",
+              output_dir / "aggregate_transition_means_by_motion_bin.csv",
+              output_dir / "aggregate_method_means_by_motion_bin.csv",
+              output_dir / "aggregate_method_means_by_noise_occlusion_motion.csv",
+              output_dir / "robustness_summary_by_motion_bin.csv",
+              output_dir / "particle_collapse_summary_by_motion_bin.csv",
+              output_dir / "transition_tracking_diagnostics_by_motion_bin.csv",
+          ]
+          for path in required:
+              assert path.exists(), f"missing required artifact: {path}"
+          summary = json.loads(required[0].read_text(encoding="utf-8"))
+          assert summary["dataset_name"] == "KIT"
+          assert summary["motion_bin_counts"], "no motion bins were produced"
+          assert summary["method_means_by_motion_bin"], "no method means were produced"
+          with required[5].open(newline="", encoding="utf-8") as handle:
+              rows = list(csv.DictReader(handle))
+          assert rows, "aggregate_method_means_by_motion_bin.csv is empty"
+          validation = {
+              "dataset_name": summary["dataset_name"],
+              "motion_bins": sorted(summary["motion_bin_counts"].keys()),
+              "motion_bin_counts": summary["motion_bin_counts"],
+              "methods": sorted({row["method"] for row in rows}),
+              "row_count": len(rows),
+              "run_count": len(summary.get("runs", [])),
+              "data_source_mode": os.environ["DATA_SOURCE_MODE"],
+          }
+          (output_dir / "motion_stratified_validation.json").write_text(json.dumps(validation, indent=2), encoding="utf-8")
+          print(json.dumps(validation, indent=2))
+          PY
+
+      - name: Write reproducibility manifest
+        run: |
+          set -euo pipefail
+          python scripts/write_experiment_manifest.py \
+            --experiment-name kit-motion-stratified-full-data \
+            --config runs/full_data_motion_stratified_kit_config.json \
+            --result-root "$OUTPUT_DIR" \
+            --output "$OUTPUT_DIR/run_manifest.json" \
+            --source-data-root "KITDATA-SECRET" \
+            --max-hash-mb "$MAX_HASH_MB"
+
+      - name: Build public-safe paper artifact package
+        run: |
+          set -euo pipefail
+          python scripts/package_paper_artifact.py \
+            --result-root "$OUTPUT_DIR" \
+            --output-dir "$PACKAGED_ARTIFACT_DIR"
+
+      - name: Upload sanitized full-data KIT paper artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name_prefix }}-${{ github.run_number }}-${{ github.sha }}
+          retention-days: ${{ inputs.artifact_retention_days }}
+          path: ${{ env.PACKAGED_ARTIFACT_DIR }}
