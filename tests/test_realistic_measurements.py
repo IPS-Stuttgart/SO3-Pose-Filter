@@ -35,25 +35,31 @@ class RealisticMeasurementTests(unittest.TestCase):
             confidence_noise_max_deg=20.0,
             confidence_noise_gamma=2.0,
         )
+        joint_noise_sigma_rad = measurements.joint_noise_sigma_rad
+        outlier_mask = measurements.outlier_mask
+        self.assertIsNotNone(joint_noise_sigma_rad)
+        self.assertIsNotNone(outlier_mask)
+        assert joint_noise_sigma_rad is not None
+        assert outlier_mask is not None
 
         self.assertEqual(measurements.mask.shape, (80, 4))
         self.assertEqual(measurements.confidence.shape, measurements.mask.shape)
-        self.assertEqual(measurements.joint_noise_sigma_rad.shape, measurements.mask.shape)
-        self.assertEqual(measurements.outlier_mask.shape, measurements.mask.shape)
+        self.assertEqual(joint_noise_sigma_rad.shape, measurements.mask.shape)
+        self.assertEqual(outlier_mask.shape, measurements.mask.shape)
         self.assertTrue(bool(np.all(measurements.mask[0])))
-        self.assertTrue(bool(np.all(measurements.outlier_mask <= measurements.mask)))
+        self.assertTrue(bool(np.all(outlier_mask <= measurements.mask)))
         self.assertTrue(bool(np.any((~measurements.mask[:-1]) & (~measurements.mask[1:]))))
         self.assertGreaterEqual(
-            float(np.min(measurements.joint_noise_sigma_rad[measurements.mask])),
+            float(np.min(joint_noise_sigma_rad[measurements.mask])),
             np.radians(2.0) - 1e-12,
         )
         self.assertLessEqual(
-            float(np.max(measurements.joint_noise_sigma_rad)),
+            float(np.max(joint_noise_sigma_rad)),
             np.radians(20.0) + 1e-12,
         )
 
         visible_conf = measurements.confidence[measurements.mask]
-        visible_sigma = measurements.joint_noise_sigma_rad[measurements.mask]
+        visible_sigma = joint_noise_sigma_rad[measurements.mask]
         low_conf_idx = int(np.argmin(visible_conf))
         high_conf_idx = int(np.argmax(visible_conf))
         self.assertGreaterEqual(visible_sigma[low_conf_idx], visible_sigma[high_conf_idx])
