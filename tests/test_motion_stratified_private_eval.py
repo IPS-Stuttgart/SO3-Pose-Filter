@@ -32,6 +32,7 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
             output_dir = root / "motion_stratified_eval"
             summary = run_motion_stratified_private_accad_eval(
                 {
+                    "dataset_name": "ToyAMASS",
                     "source_data_root": str(raw_dir),
                     "output_dir": str(output_dir),
                     "frame_rate": 20,
@@ -72,6 +73,7 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
             )
 
             self.assertTrue(summary["motion_bin_counts"])
+            self.assertEqual(summary["dataset_name"], "ToyAMASS")
             self.assertIn("low_motion", summary["motion_bin_counts"])
             self.assertIn("medium_motion", summary["motion_bin_counts"])
             self.assertIn("high_motion", summary["motion_bin_counts"])
@@ -115,6 +117,10 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
                     / "motion_stratified_private_accad_eval_summary.md"
                 ).exists()
             )
+            markdown = (
+                output_dir / "motion_stratified_private_accad_eval_summary.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("Motion-Stratified Private ToyAMASS Evaluation", markdown)
 
 
 if __name__ == "__main__":

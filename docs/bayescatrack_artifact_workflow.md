@@ -78,6 +78,24 @@ The sanitized artifact contains aggregate result tables, statistical summaries, 
 
 `run_manifest.json` records the source SHA, workflow run metadata, config hash/content, selected runtime package versions, and output file hashes. For full-data artifacts, local path-like fields are redacted before upload. Keep this manifest beside every paper result snapshot.
 
+## Motion-stratified KIT artifact
+
+For a full private KIT/AMASS evaluation, dispatch the **Full-Data KIT Motion-Stratified Benchmark** workflow. It mirrors the ACCAD full-data workflow, runs only on a self-hosted runner, caches the WebDAV download, evaluates `configs/private_kit_eval.example.json`, and uploads only sanitized paper-facing artifacts.
+
+Configure these repository or environment secrets for the default `owncloud_webdav` mode:
+
+```text
+KIT_WEBDAV_URL=<ownCloud public WebDAV endpoint>
+KIT_DATA_KEY=<ownCloud public-share token/user>
+KIT_DATA_PASSWORD=<ownCloud public-share password>
+```
+
+The default artifact name is:
+
+```text
+bayescatrack-kit-motion-stratified-full-<run-number>-<sha>
+```
+
 ## Repository boundary
 
 The paper repository should:
