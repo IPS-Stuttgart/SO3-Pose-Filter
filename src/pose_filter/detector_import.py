@@ -98,10 +98,10 @@ def find_detector_measurement_files(data_root: str | Path, dataset_subset: str =
         if root.suffix.lower() not in SUPPORTED_SUFFIXES:
             raise ValueError(f"unsupported detector output suffix: {root.suffix}")
         return [root]
-    files = sorted(p for p in root.rglob("*") if p.suffix.lower() in SUPPORTED_SUFFIXES)
+    files = sorted(path for path in root.rglob("*") if path.suffix.lower() in SUPPORTED_SUFFIXES)
     if dataset_subset:
         needle = dataset_subset.lower()
-        files = [p for p in files if needle in str(p.relative_to(root)).lower()]
+        files = [path for path in files if needle in str(path.relative_to(root)).lower()]
     return files
 
 
@@ -137,11 +137,10 @@ def _json_to_arrays(payload: Any) -> dict[str, np.ndarray]:
 
 
 def _load_arrays(path: Path) -> dict[str, np.ndarray]:
-    suffix = path.suffix.lower()
-    if suffix == ".npz":
+    if path.suffix.lower() == ".npz":
         with np.load(path, allow_pickle=False) as npz:
             return {key: np.asarray(npz[key]) for key in npz.files}
-    if suffix == ".json":
+    if path.suffix.lower() == ".json":
         return _json_to_arrays(json.loads(path.read_text(encoding="utf-8")))
     raise ValueError(f"unsupported detector output suffix: {path.suffix}")
 
@@ -160,13 +159,21 @@ def _first_key(arrays: Mapping[str, np.ndarray], keys: tuple[str, ...], requeste
 def _source_fps(arrays: Mapping[str, np.ndarray]) -> float | None:
     for key in FPS_KEYS:
         if key in arrays:
-            value = np.asarray(arrays[key]).reshape(-1)[0]
-            if np.isfinite(value) and float(value) > 0.0:
-                return float(value)
+            value = float(np.asarray(arrays[key]).reshape(-1)[0])
+            if np.isfinite(value) and value > 0.0:
+                return value
     return None
 
 
-def _measurement_noise_sigma_rad(arrays: Mapping[str, np.ndarray], fallback_noise_deg: float) -> float:
+def _stride(source_fps: float | None, frame_rate: int | None) -> int:
+    if frame_rate is None or source_fps is None:
+        return 1
+    if int(frame_rate) <= 0:
+        raise ValueError("frame_rate must be positive")
+    return max(1, int(round(float(source_fps) / float(frame_rate))))
+
+
+def _scalar_noise_rad(arrays: Mapping[str, np.ndarray], fallback_noise_deg: float) -> float:
     for key in NOISE_SIGMA_RAD_KEYS:
         if key in arrays:
             value = float(np.asarray(arrays[key], dtype=np.float64).reshape(-1)[0])
@@ -180,16 +187,6 @@ def _measurement_noise_sigma_rad(arrays: Mapping[str, np.ndarray], fallback_nois
                 return float(np.radians(value))
             raise ValueError(f"{key} must be positive and finite")
     return float(np.radians(float(fallback_noise_deg)))
-
-
-def _stride(source_fps: float | None, frame_rate: int | None) -> int:
-    if frame_rate is None:
-        return 1
-    if int(frame_rate) <= 0:
-        raise ValueError("frame_rate must be positive")
-    if source_fps is None:
-        return 1
-    return max(1, int(round(float(source_fps) / float(frame_rate))))
 
 
 def _is_body_only_key(key: str) -> bool:
@@ -218,15 +215,14 @@ def _axis_angle_to_rotations(values: np.ndarray, num_joints: int, key: str) -> n
         return axis_angle_to_matrix(_select_body_joint_axis(values, num_joints, key))
     if values.ndim != 2:
         raise ValueError(f"{key} axis-angle array must be shaped [T, D] or [T, J, 3], got {values.shape}")
-    dims = values.shape[1]
     body_dims = num_joints * 3
-    if dims == body_dims:
+    if values.shape[1] == body_dims:
         body = values.reshape(values.shape[0], num_joints, 3)
-    elif dims >= body_dims + 3:
+    elif values.shape[1] >= body_dims + 3:
         start = 0 if _is_body_only_key(key) else 3
         body = values[:, start : start + body_dims].reshape(values.shape[0], num_joints, 3)
     else:
-        raise ValueError(f"{key} has {dims} axis-angle dims; need {body_dims} body dims or full pose with root")
+        raise ValueError(f"{key} has {values.shape[1]} axis-angle dims; need {body_dims} body dims or full pose with root")
     return axis_angle_to_matrix(body)
 
 
@@ -260,10 +256,7 @@ def _canonicalize_quaternions(quaternions: np.ndarray, order: str) -> np.ndarray
 
 def _quaternions_to_rotations(quaternions: np.ndarray, order: str) -> np.ndarray:
     q = _canonicalize_quaternions(quaternions, order)
-    x = q[..., 0]
-    y = q[..., 1]
-    z = q[..., 2]
-    w = q[..., 3]
+    x, y, z, w = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
     rotations = np.empty(q.shape[:-1] + (3, 3), dtype=np.float64)
     rotations[..., 0, 0] = 1.0 - 2.0 * (y * y + z * z)
     rotations[..., 0, 1] = 2.0 * (x * y - z * w)
@@ -295,11 +288,12 @@ def _load_rotations(
     quaternion_order: str,
 ) -> tuple[np.ndarray, str]:
     requested_key = _first_key(arrays, tuple(arrays), pose_key) if pose_key else None
+    candidates: tuple[str, ...]
     if requested_key is not None:
         candidates = (requested_key,)
     else:
         candidates = (*ROTATION_MATRIX_KEYS, *AXIS_ANGLE_KEYS, *QUATERNION_KEYS)
-    errors = []
+    errors: list[str] = []
     for key in candidates:
         if key not in arrays:
             continue
@@ -317,7 +311,7 @@ def _load_rotations(
     raise ValueError(f"could not find usable detector pose keys. Tried {list(candidates)}. {detail}")
 
 
-def _joint_values(values: np.ndarray, num_joints: int, key: str, t_steps: int, default: float | None = None) -> np.ndarray:
+def _joint_values(values: np.ndarray, num_joints: int, key: str, t_steps: int) -> np.ndarray:
     values = np.asarray(values, dtype=np.float64)
     if values.ndim == 0:
         return np.full((t_steps, num_joints), float(values), dtype=np.float64)
@@ -333,8 +327,6 @@ def _joint_values(values: np.ndarray, num_joints: int, key: str, t_steps: int, d
             return values
         if values.shape[0] == t_steps and values.shape[1] > num_joints:
             return _select_body_joint_axis(values, num_joints, key)
-    if default is not None:
-        return np.full((t_steps, num_joints), default, dtype=np.float64)
     raise ValueError(f"{key} must broadcast to [T, J]={(t_steps, num_joints)}, got {values.shape}")
 
 
@@ -357,8 +349,7 @@ def _load_confidence(
         confidence = _joint_values(_apply_stride(arrays[confidence_key], stride), num_joints, confidence_key, t_steps)
     if confidence_scale <= 0.0 or not np.isfinite(confidence_scale):
         raise ValueError("confidence_scale must be positive and finite")
-    confidence = confidence / float(confidence_scale)
-    confidence = np.where(np.isfinite(confidence), confidence, 0.0)
+    confidence = np.where(np.isfinite(confidence / confidence_scale), confidence / confidence_scale, 0.0)
     return validate_confidence(confidence, (t_steps, num_joints))
 
 
@@ -366,8 +357,7 @@ def _load_mask(arrays: Mapping[str, np.ndarray], num_joints: int, t_steps: int, 
     mask_key = _first_key(arrays, MASK_KEYS, key)
     if mask_key is None:
         return None
-    mask_values = _joint_values(_apply_stride(arrays[mask_key], stride), num_joints, mask_key, t_steps)
-    return mask_values.astype(bool)
+    return _joint_values(_apply_stride(arrays[mask_key], stride), num_joints, mask_key, t_steps).astype(bool)
 
 
 def _load_joint_noise(
@@ -377,22 +367,22 @@ def _load_joint_noise(
     stride: int,
     key: str | None,
 ) -> np.ndarray | None:
-    requested = key
-    if requested:
-        if requested not in arrays:
-            raise ValueError(f"requested joint noise key '{requested}' is not present; available keys: {sorted(arrays)}")
-        noise = _joint_values(_apply_stride(arrays[requested], stride), num_joints, requested, t_steps)
-        if requested in JOINT_NOISE_DEG_KEYS or requested.endswith("_deg"):
-            noise = np.radians(noise)
+    selected_key = key
+    use_degrees = False
+    if selected_key is None:
+        selected_key = _first_key(arrays, JOINT_NOISE_RAD_KEYS)
+        if selected_key is None:
+            selected_key = _first_key(arrays, JOINT_NOISE_DEG_KEYS)
+            use_degrees = selected_key is not None
     else:
-        rad_key = _first_key(arrays, JOINT_NOISE_RAD_KEYS)
-        deg_key = _first_key(arrays, JOINT_NOISE_DEG_KEYS)
-        if rad_key is not None:
-            noise = _joint_values(_apply_stride(arrays[rad_key], stride), num_joints, rad_key, t_steps)
-        elif deg_key is not None:
-            noise = np.radians(_joint_values(_apply_stride(arrays[deg_key], stride), num_joints, deg_key, t_steps))
-        else:
-            return None
+        if selected_key not in arrays:
+            raise ValueError(f"requested joint noise key '{selected_key}' is not present; available keys: {sorted(arrays)}")
+        use_degrees = selected_key in JOINT_NOISE_DEG_KEYS or selected_key.endswith("_deg")
+    if selected_key is None:
+        return None
+    noise = _joint_values(_apply_stride(arrays[selected_key], stride), num_joints, selected_key, t_steps)
+    if use_degrees:
+        noise = np.radians(noise)
     if np.any(~np.isfinite(noise)) or np.any(noise <= 0.0):
         raise ValueError("joint measurement noise values must be positive and finite")
     return noise
@@ -418,19 +408,13 @@ def load_detector_measurement(
     quaternion_order: str = "xyzw",
     name: str | None = None,
 ) -> ImportedMeasurements:
-    """Load one real detector/SMPL-fitting output as filter measurements.
-
-    Supported pose encodings are rotation matrices, axis-angle SMPL body/full-pose arrays,
-    and scalar-last (`xyzw`) or scalar-first (`wxyz`) quaternions. Full SMPL pose arrays
-    skip the root orientation and retain the configured number of local body joints.
-    """
+    """Load one real detector/SMPL-fitting output as filter measurements."""
     path = Path(path)
     arrays = _load_arrays(path)
     source_fps = _source_fps(arrays)
     stride = _stride(source_fps, frame_rate)
     rotations, used_pose_key = _load_rotations(arrays, num_joints, pose_key, quaternion_order)
-    rotations = _apply_stride(rotations, stride)
-    observations, finite_mask = _sanitize_rotations(rotations)
+    observations, finite_mask = _sanitize_rotations(_apply_stride(rotations, stride))
     t_steps = observations.shape[0]
     if t_steps < 1:
         raise ValueError(f"{path} has no detector frames after downsampling")
@@ -442,17 +426,12 @@ def load_detector_measurement(
     confidence = np.where(mask, confidence, 0.0)
     joint_noise_sigma_rad = _load_joint_noise(arrays, num_joints, t_steps, stride, joint_noise_key)
 
-    sequence_name = name or path.stem
-    if "sequence_name" in arrays and name is None:
-        sequence_name_array = np.asarray(arrays["sequence_name"])
-        if sequence_name_array.shape == () and sequence_name_array.dtype.kind in {"U", "S"}:
-            sequence_name = str(sequence_name_array.item())
     return ImportedMeasurements(
-        name=sequence_name,
+        name=name or path.stem,
         observations=observations,
         mask=mask,
         confidence=confidence,
-        noise_sigma_rad=_measurement_noise_sigma_rad(arrays, noise_deg),
+        noise_sigma_rad=_scalar_noise_rad(arrays, noise_deg),
         joint_noise_sigma_rad=joint_noise_sigma_rad,
         source_fps=source_fps,
         frame_rate=frame_rate,
