@@ -13,6 +13,7 @@ on: # yamllint disable-line rule:truthy
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 env:
   APPLY_FIXES: all

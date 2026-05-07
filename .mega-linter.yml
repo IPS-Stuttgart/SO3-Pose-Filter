@@ -1,4 +1,6 @@
 APPLY_FIXES: all
+PRINT_ALPACA: false
+SHOW_ELAPSED_TIME: true
 
 PRE_COMMANDS:
   - command: cat /etc/os-release
