@@ -16,7 +16,9 @@ jobs:
     name: PyRecEst-backed ACCAD benchmark
     runs-on: ubuntu-latest
     env:
-      SAMPLE_URL: ${{ secrets.AMASS_ACCAD_SAMPLE || 'https://bwsyncandshare.kit.edu/s/ZABDz4XzMM85L39' }}
+      ACCAD_DATA_WEBDAV_URL: ${{ secrets.ACCAD_DATA_WEBDAV_URL }}
+      ACCAD_DATA_KEY: ${{ secrets.ACCAD_DATA_KEY }}
+      ACCAD_DATA_PASSWORD: ${{ secrets.ACCAD_DATA_PASSWORD }}
 
     steps:
       - name: Check out repository
@@ -27,6 +29,28 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install rclone without sudo
+        run: |
+          set -euo pipefail
+          if ! command -v rclone >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
+            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+              -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+            python -m zipfile -e \
+              "$RUNNER_TEMP/rclone-download/rclone.zip" \
+              "$RUNNER_TEMP/rclone-download/extract"
+            RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
+            if [ -z "$RCLONE_BIN" ]; then
+              echo "Downloaded rclone archive did not contain rclone binary" >&2
+              exit 1
+            fi
+            cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
+            chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
+            echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+            export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+          fi
+          rclone version
+
       - name: Install package and PyRecEst main
         run: |
           python -m pip install --upgrade pip
@@ -35,10 +59,14 @@ jobs:
 
       - name: Download ACCAD AMASS sample
         run: |
-          python scripts/download_amass_sample.py \
-            --url "$SAMPLE_URL" \
-            --output data/accad_secret_sample/sample.npz \
-            --report runs/accad_first_results_download_report.json
+          python scripts/download_webdav_amass_sample.py \
+            --output-dir data/accad_secret_sample \
+            --report runs/accad_first_results_download_report.json \
+            --max-files 1 \
+            --webdav-url-env ACCAD_DATA_WEBDAV_URL \
+            --key-env ACCAD_DATA_KEY \
+            --password-env ACCAD_DATA_PASSWORD \
+            --source-name ACCAD_DATA_WEBDAV_URL
 
       - name: Build benchmark sequence chunks
         run: |
