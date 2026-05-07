@@ -42,6 +42,44 @@ class PackagePaperArtifactTests(unittest.TestCase):
             )
             self.assertEqual(summary, "- source data root: `<redacted>`\n")
 
+    def test_package_artifact_includes_smoke_outputs_and_reproducible_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result_root = root / "result"
+            plots_dir = result_root / "plots"
+            plots_dir.mkdir(parents=True)
+            (result_root / "summary.json").write_text(
+                json.dumps({"result_root": "/home/user/private/run", "num_joints": 23}),
+                encoding="utf-8",
+            )
+            (result_root / "filter_metrics.csv").write_text(
+                "method,run_dir,filter_error_deg\nfilter,/home/user/private/run,4.2\n",
+                encoding="utf-8",
+            )
+            (plots_dir / "filter_vs_baselines.svg").write_text("<svg>ok</svg>", encoding="utf-8")
+            (result_root / "private_motion.npz").write_bytes(b"raw data must not be copied")
+
+            output_dir = root / "paper"
+            output_zip = root / "paper.zip"
+            manifest = package_artifact(result_root, output_dir, output_zip=output_zip)
+            first_zip_bytes = output_zip.read_bytes()
+            second_manifest = package_artifact(result_root, output_dir, output_zip=output_zip)
+
+            self.assertEqual(manifest, second_manifest)
+            self.assertEqual(output_zip.read_bytes(), first_zip_bytes)
+            self.assertEqual(manifest["schema_version"], 2)
+            self.assertIn("summary.json", manifest["files"])
+            self.assertIn("filter_metrics.csv", manifest["files"])
+            self.assertIn("plots/filter_vs_baselines.svg", manifest["files"])
+            self.assertNotIn("private_motion.npz", manifest["files"])
+
+            copied_summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(copied_summary["result_root"], "<redacted>")
+            copied_metrics = (output_dir / "filter_metrics.csv").read_text(encoding="utf-8")
+            self.assertNotIn("run_dir", copied_metrics)
+            self.assertNotIn("/home/user/private/run", copied_metrics)
+            self.assertTrue(all(record["sha256"] for record in manifest["file_records"]))
+
 
 if __name__ == "__main__":
     unittest.main()
