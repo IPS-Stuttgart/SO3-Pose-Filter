@@ -3,6 +3,8 @@
 __all__ = [
     "constant_velocity",
     "data",
+    "detector_evaluation",
+    "detector_import",
     "evaluation",
     "experiment",
     "measurements",
