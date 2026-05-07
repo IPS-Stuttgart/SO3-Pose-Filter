@@ -20,14 +20,14 @@ on:
         required: true
         default: runs/motion_stratified_private_accad_eval
       download_sample:
-        description: Download AMASS/ACCAD sample via scripts/download_amass_sample.py before running.
+        description: Download a bounded ACCAD AMASS sample from WebDAV before running.
         required: true
         type: boolean
         default: true
-      sample_url:
-        description: Optional sample URL override. If blank, secrets.AMASS_ACCAD_SAMPLE is used.
-        required: false
-        default: ""
+      sample_file_count:
+        description: Number of ACCAD .npz files to copy from WebDAV when download_sample=true.
+        required: true
+        default: "1"
       skip_prepare:
         description: Reuse existing window_selection_report.json and segments_dir.
         required: true
@@ -61,7 +61,9 @@ jobs:
       CONFIG_PATH: ${{ inputs.config_path }}
       DATA_ROOT: ${{ inputs.data_root }}
       OUTPUT_DIR: ${{ inputs.output_dir }}
-      SAMPLE_URL: ${{ inputs.sample_url || secrets.AMASS_ACCAD_SAMPLE || 'https://bwsyncandshare.kit.edu/s/ZABDz4XzMM85L39' }}
+      ACCAD_DATA_WEBDAV_URL: ${{ secrets.ACCAD_DATA_WEBDAV_URL }}
+      ACCAD_DATA_KEY: ${{ secrets.ACCAD_DATA_KEY }}
+      ACCAD_DATA_PASSWORD: ${{ secrets.ACCAD_DATA_PASSWORD }}
 
     steps:
       - name: Check out repository
@@ -73,6 +75,29 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Install rclone without sudo
+        if: ${{ inputs.download_sample == true || inputs.download_sample == 'true' }}
+        run: |
+          set -euo pipefail
+          if ! command -v rclone >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
+            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+              -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+            python -m zipfile -e \
+              "$RUNNER_TEMP/rclone-download/rclone.zip" \
+              "$RUNNER_TEMP/rclone-download/extract"
+            RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
+            if [ -z "$RCLONE_BIN" ]; then
+              echo "Downloaded rclone archive did not contain rclone binary" >&2
+              exit 1
+            fi
+            cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
+            chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
+            echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+            export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+          fi
+          rclone version
+
       - name: Install package, Torch extras, and PyRecEst main
         run: |
           python -m pip install --upgrade pip
@@ -82,12 +107,11 @@ jobs:
       - name: Download ACCAD AMASS sample
         if: ${{ inputs.download_sample == true || inputs.download_sample == 'true' }}
         run: |
-          test -n "$SAMPLE_URL" || { echo "No sample URL provided. Set inputs.sample_url or secrets.AMASS_ACCAD_SAMPLE." >&2; exit 1; }
           mkdir -p "$DATA_ROOT" runs
-          python scripts/download_amass_sample.py \
-            --url "$SAMPLE_URL" \
-            --output "$DATA_ROOT/sample.npz" \
-            --report runs/motion_stratified_download_report.json
+          python scripts/download_accad_webdav_sample.py \
+            --output-dir "$DATA_ROOT" \
+            --report runs/motion_stratified_download_report.json \
+            --max-files "${{ inputs.sample_file_count }}"
 
       - name: Run motion-stratified private ACCAD evaluation
         run: |

@@ -99,14 +99,15 @@ Copy `configs/amass_small.example.json` to a local config and replace `data_root
 directory. Keep generated real-data outputs under `runs/` or `results/`; they are ignored by git.
 
 The ACCAD first-results benchmark workflow uses `configs/accad_first_results.example.json` and
-`configs/accad_first_results_benchmark.example.json`. It downloads the OwnCloud ACCAD sample URL from the
-`AMASS_ACCAD_SAMPLE` secret, falling back to the public share URL used for this project, chunks the motion
-file into train/validation/test sequence windows, runs the PyRecEst-backed Gaussian random-walk filter, runs
-a compact transition-model sweep, and runs the first-results benchmark wrapper. It uploads CSV, JSON, and
-SVG artifacts. The workflow asserts that the filter beats raw synthetic observations and reports the
-persistence rollout baseline under the configured moderate noise/occlusion setting. The benchmark workflow
-is intentionally bounded to one downloaded sample, at most six selected windows, and four benchmark grid
-points so pull requests do not scan or evaluate a full AMASS dataset.
+`configs/accad_first_results_benchmark.example.json`. It uses rclone with the `ACCAD_DATA_WEBDAV_URL`,
+`ACCAD_DATA_KEY`, and `ACCAD_DATA_PASSWORD` secrets to list the ownCloud/WebDAV ACCAD share, copies only a
+bounded number of `*_poses.npz` files, chunks the downloaded motion into train/validation/test sequence
+windows, runs the PyRecEst-backed Gaussian random-walk filter, runs a compact transition-model sweep, and
+runs the first-results benchmark wrapper. It uploads CSV, JSON, and SVG artifacts. The workflow asserts
+that the filter beats raw synthetic observations and reports the persistence rollout baseline under the
+configured moderate noise/occlusion setting. The benchmark workflow is intentionally bounded to one
+downloaded sample, at most six selected windows, and four benchmark grid points so pull requests do not scan
+or evaluate a full AMASS dataset.
 
 For a local ACCAD run on a full dataset checkout, first select a bounded set of dynamic windows and then
 run the dynamic benchmark config:

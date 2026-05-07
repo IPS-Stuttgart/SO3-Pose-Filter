@@ -16,7 +16,9 @@ jobs:
     name: Download ACCAD sample and run smoke experiment
     runs-on: ubuntu-latest
     env:
-      SAMPLE_URL: ${{ secrets.AMASS_ACCAD_SAMPLE || 'https://bwsyncandshare.kit.edu/s/ZABDz4XzMM85L39' }}
+      ACCAD_DATA_WEBDAV_URL: ${{ secrets.ACCAD_DATA_WEBDAV_URL }}
+      ACCAD_DATA_KEY: ${{ secrets.ACCAD_DATA_KEY }}
+      ACCAD_DATA_PASSWORD: ${{ secrets.ACCAD_DATA_PASSWORD }}
 
     steps:
       - name: Check out repository
@@ -27,185 +29,39 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install rclone without sudo
+        run: |
+          set -euo pipefail
+          if ! command -v rclone >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
+            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+              -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+            python -m zipfile -e \
+              "$RUNNER_TEMP/rclone-download/rclone.zip" \
+              "$RUNNER_TEMP/rclone-download/extract"
+            RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
+            if [ -z "$RCLONE_BIN" ]; then
+              echo "Downloaded rclone archive did not contain rclone binary" >&2
+              exit 1
+            fi
+            cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
+            chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
+            echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+            export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+          fi
+          rclone version
+
       - name: Install package
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .
 
-      - name: Download and validate AMASS sample
+      - name: Download and validate ACCAD AMASS sample
         run: |
-          python - <<'PY'
-          from __future__ import annotations
-
-          import base64
-          import html
-          import json
-          import os
-          import re
-          import shutil
-          import urllib.parse
-          import urllib.request
-          import zipfile
-          from pathlib import Path
-
-          import numpy as np
-
-          sample_url = os.environ.get("SAMPLE_URL", "").strip()
-          if not sample_url:
-              raise SystemExit("AMASS_ACCAD_SAMPLE secret is empty or missing")
-
-          target_dir = Path("data/accad_secret_sample")
-          target_dir.mkdir(parents=True, exist_ok=True)
-
-          def is_amass_npz(path: Path) -> tuple[bool, dict]:
-              try:
-                  with np.load(path, allow_pickle=False) as data:
-                      keys = set(data.files)
-                      if "poses" not in keys:
-                          return False, {"keys": sorted(keys)}
-                      poses_shape = tuple(data["poses"].shape)
-                      ok = (
-                          len(poses_shape) == 2
-                          and poses_shape[0] >= 2
-                          and poses_shape[1] >= 72
-                      )
-                      return ok, {
-                          "keys": sorted(keys),
-                          "poses_shape": poses_shape,
-                          "mocap_framerate": float(
-                              np.asarray(
-                                  data[
-                                      "mocap_framerate"
-                                      if "mocap_framerate" in keys
-                                      else "mocap_frame_rate"
-                                  ]
-                              ).reshape(-1)[0]
-                          )
-                          if keys.intersection(
-                              {"mocap_framerate", "mocap_frame_rate"}
-                          )
-                          else None,
-                      }
-              except Exception as exc:
-                  return False, {"error": str(exc)}
-
-          def public_share_filename(url: str) -> str | None:
-              try:
-                  request = urllib.request.Request(
-                      url,
-                      headers={"User-Agent": "SO3-Pose-Filter-CI/1.0"},
-                  )
-                  with urllib.request.urlopen(request, timeout=30) as response:
-                      page = response.read(2_000_000).decode("utf-8", "replace")
-              except Exception:
-                  return None
-
-              match = re.search(
-                  r'id="initial-state-files_sharing-filename"\s+value="([^"]+)"',
-                  page,
-              )
-              if not match:
-                  return None
-              try:
-                  encoded = html.unescape(match.group(1))
-                  decoded = base64.b64decode(encoded).decode("utf-8")
-              except Exception:
-                  return None
-              return decoded or None
-
-          def candidate_urls(url: str) -> list[str]:
-              out = [url]
-              parsed = urllib.parse.urlparse(url)
-              if not parsed.scheme:
-                  return out
-              clean = url.rstrip("/")
-              out.extend([f"{clean}/download", f"{clean}?download=1"])
-              match = re.search(r"/s/([^/?#]+)", parsed.path)
-              if match:
-                  token = match.group(1)
-                  base = f"{parsed.scheme}://{parsed.netloc}"
-                  filename = public_share_filename(url)
-                  if filename:
-                      quoted_filename = urllib.parse.quote(filename)
-                      out.extend(
-                          [
-                              f"{clean}/download/{quoted_filename}",
-                              f"{base}/s/{token}/download/{quoted_filename}",
-                              f"{base}/index.php/s/{token}/download/{quoted_filename}",
-                          ]
-                      )
-                  out.extend(
-                      [
-                          f"{base}/s/{token}/download",
-                          f"{base}/index.php/s/{token}/download",
-                          f"{base}/public.php/dav/files/{token}",
-                      ]
-                  )
-              return list(dict.fromkeys(out))
-
-          def download(url: str, destination: Path) -> None:
-              request = urllib.request.Request(
-                  url,
-                  headers={
-                      "User-Agent": "SO3-Pose-Filter-CI/1.0",
-                      "Accept": "application/octet-stream,*/*",
-                  },
-              )
-              with urllib.request.urlopen(request, timeout=120) as response:
-                  with destination.open("wb") as handle:
-                      shutil.copyfileobj(response, handle)
-
-          errors: list[str] = []
-          selected: Path | None = None
-          selected_meta: dict | None = None
-
-          for idx, url in enumerate(candidate_urls(sample_url)):
-              raw_path = target_dir / f"candidate_{idx}"
-              try:
-                  download(url, raw_path)
-                  ok, meta = is_amass_npz(raw_path)
-                  if ok:
-                      selected = target_dir / "sample.npz"
-                      raw_path.replace(selected)
-                      selected_meta = meta
-                  elif zipfile.is_zipfile(raw_path):
-                      extract_dir = target_dir / f"candidate_{idx}_unzipped"
-                      with zipfile.ZipFile(raw_path) as archive:
-                          archive.extractall(extract_dir)
-                      for npz_path in extract_dir.rglob("*.npz"):
-                          ok, meta = is_amass_npz(npz_path)
-                          if ok:
-                              selected, selected_meta = npz_path, meta
-                              break
-                  if selected is not None:
-                      break
-                  errors.append(f"{url}: downloaded but not an AMASS .npz")
-              except Exception as exc:
-                  errors.append(f"{url}: {exc}")
-
-          if selected is None or selected_meta is None:
-              raise SystemExit(
-                  "Could not download a valid AMASS .npz from AMASS_ACCAD_SAMPLE. "
-                  "Use a direct .npz/archive download URL if the public share page "
-                  "does not expose raw file bytes.\n"
-                  + "\n".join(errors)
-              )
-
-          final_path = target_dir / "sample.npz"
-          if selected != final_path:
-              shutil.copy2(selected, final_path)
-          report = {
-              "sample_path": str(final_path),
-              "metadata": selected_meta,
-              "source": "AMASS_ACCAD_SAMPLE secret",
-          }
-          Path("runs").mkdir(exist_ok=True)
-          Path("runs/accad_sample_download_report.json").write_text(
-              json.dumps(report, indent=2),
-              encoding="utf-8",
-          )
-          print(json.dumps(report, indent=2))
-          PY
+          python scripts/download_accad_webdav_sample.py \
+            --output-dir data/accad_secret_sample \
+            --report runs/accad_sample_download_report.json \
+            --max-files 1
 
       - name: Build trimmed smoke subset and config
         run: |
@@ -285,7 +141,8 @@ jobs:
 
           assert summary["num_joints"] == 23
           assert summary["num_sequences"] == 1
-          assert report["metadata"]["poses_shape"][1] >= 72
+          assert report["source"] == "ACCAD_DATA_WEBDAV_URL"
+          assert report["files"][0]["metadata"]["poses_shape"][1] >= 72
           assert means["filter_error_deg"] >= 0.0
           assert means["observed_error_deg"] >= 0.0
 
