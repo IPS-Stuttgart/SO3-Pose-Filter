@@ -21,7 +21,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = ["numpy>=1.24", "pyrecest>=1.1.1"]
+dependencies = ["numpy>=1.24", "pyrecest>=2.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/IPS-Stuttgart/SO3-Pose-Filter"
