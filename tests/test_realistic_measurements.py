@@ -37,10 +37,10 @@ class RealisticMeasurementTests(unittest.TestCase):
         )
         joint_noise_sigma_rad = measurements.joint_noise_sigma_rad
         outlier_mask = measurements.outlier_mask
-        self.assertIsNotNone(joint_noise_sigma_rad)
-        self.assertIsNotNone(outlier_mask)
-        assert joint_noise_sigma_rad is not None
-        assert outlier_mask is not None
+        if joint_noise_sigma_rad is None:
+            self.fail("expected joint_noise_sigma_rad to be generated")
+        if outlier_mask is None:
+            self.fail("expected outlier_mask to be generated")
 
         self.assertEqual(measurements.mask.shape, (80, 4))
         self.assertEqual(measurements.confidence.shape, measurements.mask.shape)
