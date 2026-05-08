@@ -116,6 +116,7 @@ def run_particle_filter(
     proposal_gain: float = 0.2,
     confidence: np.ndarray | None = None,
     joint_noise_sigma_rad: np.ndarray | None = None,
+    particle_blocks=None,
 ) -> ParticleFilterResult:
     """Run a guided bootstrap particle filter on one sequence.
 
@@ -127,6 +128,23 @@ def run_particle_filter(
     measurement likelihood. `joint_noise_sigma_rad` can override the scalar
     measurement noise with per-frame, per-joint standard deviations.
     """
+    if particle_blocks is not None:
+        from .block_particle_filter import run_block_particle_filter
+
+        return run_block_particle_filter(
+            observations,
+            mask,
+            transition_model,
+            noise_sigma_rad,
+            num_particles,
+            rng,
+            particle_blocks=particle_blocks,
+            resample_threshold=resample_threshold,
+            proposal_gain=proposal_gain,
+            confidence=confidence,
+            joint_noise_sigma_rad=joint_noise_sigma_rad,
+        )
+
     observations = np.asarray(observations, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
     confidence = _prepare_confidence(mask, confidence)
@@ -232,6 +250,7 @@ def run_filter(
     backend: str = "numpy",
     confidence: np.ndarray | None = None,
     joint_noise_sigma_rad: np.ndarray | None = None,
+    particle_blocks=None,
 ) -> ParticleFilterResult:
     """Run a configured particle filter backend."""
     if backend == "numpy":
@@ -247,8 +266,11 @@ def run_filter(
             proposal_gain=proposal_gain,
             confidence=confidence,
             joint_noise_sigma_rad=joint_noise_sigma_rad,
+            particle_blocks=particle_blocks,
         )
     if backend == "pyrecest":
+        if particle_blocks is not None:
+            raise ValueError("particle_blocks is currently supported only for filter_backend='numpy'")
         from .pyrecest_filter import run_pyrecest_particle_filter
 
         return run_pyrecest_particle_filter(
