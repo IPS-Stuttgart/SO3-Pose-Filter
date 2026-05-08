@@ -2663,15 +2663,13 @@ files = [
 
 [[package]]
 name = "pyrecest"
-version = "2.0.0"
+version = "2.1.0"
 description = "Framework for recursive Bayesian estimation in Python."
 optional = false
-python-versions = "<3.15,>=3.11"
+python-versions = ">=3.11,<3.15"
 groups = ["main"]
-files = [
-    {file = "pyrecest-2.0.0-py3-none-any.whl", hash = "sha256:306db61cc9e2b173a0337dd61725b94694b0e71328b1e85c4766b891a4383cb2"},
-    {file = "pyrecest-2.0.0.tar.gz", hash = "sha256:f716ef5ec47059d37b95049578562b703e029601fcd43d815103994e83761516"},
-]
+files = []
+develop = false
 
 [package.dependencies]
 beartype = "*"
@@ -2679,13 +2677,19 @@ matplotlib = "*"
 mpmath = "*"
 numpy = "*"
 pyshtools = "*"
-scipy = ">=1.17.1,<2.0.0"
+scipy = "^1.17.1"
 shapely = "*"
 
 [package.extras]
 healpy-support = ["healpy"]
 jax-support = ["autograd", "jax", "jaxlib"]
 pytorch-support = ["torch"]
+
+[package.source]
+type = "git"
+url = "https://github.com/FlorianPfaff/PyRecEst.git"
+reference = "main"
+resolved_reference = "d41f8f1ecfef7d448e41d1aa03623b83e57d9072"
 
 [[package]]
 name = "pyshtools"
@@ -3547,4 +3551,4 @@ torch = ["torch"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.15"
-content-hash = "7b8590ba495e9992951e166e522f7d1c5d00189aff6eb04bb86e4305502a2686"
+content-hash = "0b587ce4b31652e7dabdc0cc411183e7a5ef520c8956a83df9d85fd494617ad7"
