@@ -6,15 +6,15 @@ import numpy as np
 
 from .particle_filter import (
     ParticleFilterResult,
-    _normalize_log_weights,
     _normalize_log_weights_axis0,
+    _particle_spread_deg,
     _prepare_confidence,
     _prepare_joint_noise,
     initialize_particles,
     systematic_resample,
 )
 from .quaternion import quaternions_to_rotations, rotations_to_quaternions
-from .so3 import chordal_mean, geodesic_distance, left_apply_delta, left_delta
+from .so3 import chordal_mean, left_apply_delta, left_delta
 from .transitions import TransitionModel
 
 
@@ -31,6 +31,16 @@ def _import_pyrecest_filter():
                 "filter_backend='pyrecest' requires PyRecEst with "
                 "pyrecest.filters.SO3ProductParticleFilter available."
             ) from exc
+    required_methods = (
+        "component_geodesic_log_likelihood",
+        "update_with_log_likelihood",
+    )
+    missing = [name for name in required_methods if not hasattr(SO3ProductParticleFilter, name)]
+    if missing:
+        raise ImportError(
+            "filter_backend='pyrecest' requires a recent PyRecEst main with "
+            f"SO3ProductParticleFilter methods: {', '.join(missing)}."
+        )
     return SO3ProductParticleFilter
 
 
@@ -45,6 +55,25 @@ def is_pyrecest_filter_available() -> bool:
 
 def _as_numpy(value) -> np.ndarray:
     return np.asarray(value, dtype=np.float64)
+
+
+def _component_geodesic_log_likelihood(
+    filter_state,
+    observation: np.ndarray,
+    component_noise_std: np.ndarray,
+    mask: np.ndarray,
+    confidence: np.ndarray,
+) -> np.ndarray:
+    """Evaluate PyRecEst's masked SO(3)^K component log-likelihood."""
+
+    return _as_numpy(
+        filter_state.component_geodesic_log_likelihood(
+            rotations_to_quaternions(observation),
+            component_noise_std=component_noise_std,
+            mask=mask,
+            confidence=confidence,
+        )
+    )
 
 
 def run_pyrecest_particle_filter(
@@ -91,6 +120,7 @@ def run_pyrecest_particle_filter(
     estimates = []
     ess_values = []
     resampled_flags = []
+    spread_values = []
     particle_history: list[np.ndarray] = []
     history_keep = int(getattr(transition_model, "history_length", 0)) + 1
 
@@ -111,9 +141,13 @@ def run_pyrecest_particle_filter(
             filter_state.set_particles(rotations_to_quaternions(corrected))
 
         particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
-        dist = geodesic_distance(particles, observations[t])
-        joint_sigma = joint_noise_sigma_rad[t][None, :]
-        joint_ll = -0.5 * confidence[t][None, :] * (dist / joint_sigma) ** 2
+        joint_ll = _component_geodesic_log_likelihood(
+            filter_state,
+            observations[t],
+            component_noise_std=joint_noise_sigma_rad[t],
+            mask=mask[t],
+            confidence=confidence[t],
+        )
 
         if factorized_update:
             joint_weights, log_joint_weights = _normalize_log_weights_axis0(
@@ -127,7 +161,8 @@ def run_pyrecest_particle_filter(
                         joint_weights[:, joint_idx],
                     )[0]
                 )
-            estimates.append(np.asarray(estimate))
+            estimate_array = np.asarray(estimate)
+            estimates.append(estimate_array)
             ess_per_joint = 1.0 / np.sum(joint_weights * joint_weights, axis=0)
             ess = float(np.mean(ess_per_joint))
             weights = np.mean(joint_weights, axis=1)
@@ -138,13 +173,14 @@ def run_pyrecest_particle_filter(
             )
         else:
             ll = np.sum(joint_ll, axis=-1)
-            weights, log_weights = _normalize_log_weights(log_weights + ll)
-            filter_state.set_particles(
-                _as_numpy(filter_state.particles), weights=weights
-            )
+            filter_state.update_with_log_likelihood(ll, resample=False)
+            weights = _as_numpy(filter_state.weights)
+            log_weights = np.log(weights + 1e-300)
             ess = float(np.asarray(filter_state.effective_sample_size()))
-            estimates.append(quaternions_to_rotations(_as_numpy(filter_state.mean())))
+            estimate_array = quaternions_to_rotations(_as_numpy(filter_state.mean()))
+            estimates.append(estimate_array)
 
+        spread_values.append(_particle_spread_deg(particles, estimate_array))
         ess_values.append(ess)
         should_resample = ess < resample_threshold * num_particles
         resampled_flags.append(should_resample)
@@ -173,4 +209,5 @@ def run_pyrecest_particle_filter(
         estimates=np.asarray(estimates),
         effective_sample_size=np.asarray(ess_values),
         resampled=np.asarray(resampled_flags, dtype=bool),
+        particle_spread_deg=np.asarray(spread_values, dtype=np.float64),
     )
