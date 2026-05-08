@@ -48,6 +48,71 @@ def _as_numpy(value) -> np.ndarray:
     return np.asarray(value, dtype=np.float64)
 
 
+def _component_geodesic_log_likelihood(
+    filter_state,
+    observation: np.ndarray,
+    mask: np.ndarray,
+    confidence: np.ndarray,
+    noise_sigma_rad: float,
+    joint_noise_sigma_rad: np.ndarray,
+) -> np.ndarray:
+    """Evaluate PyRecEst's component SO(3)^K geodesic log likelihood.
+
+    The fallback keeps the adapter usable with released PyRecEst versions while
+    the primary path exercises PyRecEst main's confidence-aware, heteroskedastic
+    component likelihood API.
+    """
+    if hasattr(filter_state, "component_geodesic_log_likelihood"):
+        return _as_numpy(
+            filter_state.component_geodesic_log_likelihood(
+                rotations_to_quaternions(observation),
+                noise_sigma_rad,
+                component_noise_std=joint_noise_sigma_rad,
+                mask=mask.astype(np.float64),
+                confidence=confidence,
+            )
+        )
+
+    particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
+    dist = geodesic_distance(particles, observation)
+    return -0.5 * confidence[None, :] * (dist / joint_noise_sigma_rad[None, :]) ** 2
+
+
+def _update_with_geodesic_log_likelihood(
+    filter_state,
+    observation: np.ndarray,
+    mask: np.ndarray,
+    confidence: np.ndarray,
+    noise_sigma_rad: float,
+    joint_noise_sigma_rad: np.ndarray,
+    log_weights: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Update PyRecEst weights using its geodesic log-likelihood API if present."""
+    if hasattr(filter_state, "update_with_geodesic_log_likelihood"):
+        ess = filter_state.update_with_geodesic_log_likelihood(
+            rotations_to_quaternions(observation),
+            noise_sigma_rad,
+            component_noise_std=joint_noise_sigma_rad,
+            mask=mask.astype(np.float64),
+            confidence=confidence,
+            resample=False,
+        )
+        weights = _as_numpy(filter_state.weights)
+        return weights, np.log(weights + 1e-300), float(np.asarray(ess))
+
+    joint_ll = _component_geodesic_log_likelihood(
+        filter_state,
+        observation,
+        mask,
+        confidence,
+        noise_sigma_rad,
+        joint_noise_sigma_rad,
+    )
+    weights, log_weights = _normalize_log_weights(log_weights + np.sum(joint_ll, axis=-1))
+    filter_state.set_particles(_as_numpy(filter_state.particles), weights=weights)
+    return weights, log_weights, float(np.asarray(filter_state.effective_sample_size()))
+
+
 def run_pyrecest_particle_filter(
     observations: np.ndarray,
     mask: np.ndarray,
@@ -65,7 +130,10 @@ def run_pyrecest_particle_filter(
 
     The surrounding prototype stores rotations as matrices. This adapter keeps
     transition models and metrics in that representation while using PyRecEst's
-    ``SO3ProductParticleFilter`` as the particle-state backend.
+    ``SO3ProductParticleFilter`` as the particle-state backend.  Measurement
+    scoring is delegated to PyRecEst's SO(3)^K geodesic log-likelihood helpers
+    when available, including masks, confidence values, and heteroskedastic
+    per-joint noise scales.
     """
     SO3ProductParticleFilter = _import_pyrecest_filter()
 
@@ -113,9 +181,14 @@ def run_pyrecest_particle_filter(
             filter_state.set_particles(rotations_to_quaternions(corrected))
 
         particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
-        dist = geodesic_distance(particles, observations[t])
-        joint_sigma = joint_noise_sigma_rad[t][None, :]
-        joint_ll = -0.5 * confidence[t][None, :] * (dist / joint_sigma) ** 2
+        joint_ll = _component_geodesic_log_likelihood(
+            filter_state,
+            observations[t],
+            mask[t],
+            confidence[t],
+            noise_sigma_rad,
+            joint_noise_sigma_rad[t],
+        )
 
         if factorized_update:
             joint_weights, log_joint_weights = _normalize_log_weights_axis0(
@@ -140,12 +213,15 @@ def run_pyrecest_particle_filter(
                 _as_numpy(filter_state.particles), weights=weights
             )
         else:
-            ll = np.sum(joint_ll, axis=-1)
-            weights, log_weights = _normalize_log_weights(log_weights + ll)
-            filter_state.set_particles(
-                _as_numpy(filter_state.particles), weights=weights
+            weights, log_weights, ess = _update_with_geodesic_log_likelihood(
+                filter_state,
+                observations[t],
+                mask[t],
+                confidence[t],
+                noise_sigma_rad,
+                joint_noise_sigma_rad[t],
+                log_weights,
             )
-            ess = float(np.asarray(filter_state.effective_sample_size()))
             estimate_array = quaternions_to_rotations(_as_numpy(filter_state.mean()))
             estimates.append(estimate_array)
 
