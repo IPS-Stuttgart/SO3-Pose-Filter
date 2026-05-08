@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Prototype for recursive Bayesian filtering of human pose trajectories on SO(3)^K."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 authors = [{ name = "Florian Pfaff" }]
 keywords = ["SO(3)", "Bayesian filtering", "particle filter", "human motion", "SMPL", "AMASS"]
 classifiers = [
