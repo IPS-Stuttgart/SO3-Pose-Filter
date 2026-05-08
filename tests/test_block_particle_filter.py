@@ -14,6 +14,7 @@ from pose_filter.block_particle_filter import (
 )
 from pose_filter.data import load_dataset, split_sequences
 from pose_filter.measurements import make_synthetic_measurements
+from pose_filter.particle_filter import run_filter
 from pose_filter.transitions import GaussianRandomWalkTransition
 
 
@@ -74,6 +75,42 @@ class BlockParticleFilterTests(unittest.TestCase):
             self.assertTrue(bool(np.all(np.isfinite(result.effective_sample_size))))
             self.assertTrue(bool(np.all(result.effective_sample_size > 0.0)))
             self.assertEqual(result.resampled.shape, result.effective_sample_size.shape)
+
+    def test_run_filter_routes_particle_blocks_to_numpy_block_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx in range(4):
+                _write_toy(root / f"seq_{idx}.npz", frames=45 + idx * 3)
+            seqs = load_dataset(root, "", frame_rate=20, num_joints=23)
+            train, _, test = split_sequences(seqs, seed=9)
+            model = GaussianRandomWalkTransition.fit(train)
+            rng = np.random.default_rng(23)
+            meas = make_synthetic_measurements(test[0].rotations, 8.0, 0.25, rng)
+
+            result = run_filter(
+                meas.observations,
+                meas.mask,
+                model,
+                meas.noise_sigma_rad,
+                num_particles=12,
+                rng=rng,
+                confidence=meas.confidence,
+                particle_blocks="smpl_body",
+                backend="numpy",
+            )
+
+            self.assertEqual(result.estimates.shape, test[0].rotations.shape)
+            with self.assertRaises(ValueError):
+                run_filter(
+                    meas.observations,
+                    meas.mask,
+                    model,
+                    meas.noise_sigma_rad,
+                    num_particles=12,
+                    rng=rng,
+                    particle_blocks="smpl_body",
+                    backend="pyrecest",
+                )
 
 
 if __name__ == "__main__":
