@@ -295,6 +295,7 @@ def _load_rotations(
     quaternion_order: str,
 ) -> tuple[np.ndarray, str]:
     requested_key = _first_key(arrays, tuple(arrays), pose_key) if pose_key else None
+    candidates: tuple[str, ...]
     if requested_key is not None:
         candidates = (requested_key,)
     else:
