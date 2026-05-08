@@ -63,7 +63,10 @@ class DetectorImportTests(unittest.TestCase):
             self.assertEqual(measurement.observations.shape, (16, 23, 3, 3))
             self.assertEqual(measurement.mask.shape, (16, 23))
             self.assertEqual(measurement.confidence.shape, (16, 23))
-            self.assertEqual(measurement.joint_noise_sigma_rad.shape, (16, 23))
+            joint_noise_sigma_rad = measurement.joint_noise_sigma_rad
+            if joint_noise_sigma_rad is None:
+                self.fail("expected joint_noise_sigma_rad to be loaded")
+            self.assertEqual(joint_noise_sigma_rad.shape, (16, 23))
             self.assertEqual(measurement.source, "detector:body_pose")
             self.assertFalse(bool(measurement.mask[2, 3]))
             self.assertFalse(bool(measurement.mask[2, 5]))
