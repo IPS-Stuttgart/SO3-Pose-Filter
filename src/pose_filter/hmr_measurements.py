@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import pickle
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -44,7 +43,35 @@ def find_hmr_measurement_files(data_root: str | Path, dataset_subset: str = "") 
     return files
 
 
-def _load(path: Path) -> Any:
+def _load_pickle(path: Path) -> Any:
+    # Optional loader for trusted local HMR exports.
+    import pickle  # nosec B403
+
+    with path.open("rb") as handle:
+        # Guarded by allow_unsafe_deserialization.
+        return pickle.load(handle)  # nosec B301
+
+
+def _load_torch(path: Path, allow_unsafe_deserialization: bool) -> Any:
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError(f"loading {path.suffix.lower()} HMR outputs requires PyTorch") from exc
+
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except TypeError as exc:
+        if not allow_unsafe_deserialization:
+            raise ValueError(
+                "safe torch loading requires a PyTorch version with weights_only=True; " "pass allow_unsafe_deserialization=True only for trusted local HMR outputs"
+            ) from exc
+    except Exception as exc:
+        if not allow_unsafe_deserialization:
+            raise ValueError("safe torch loading failed; pass allow_unsafe_deserialization=True " "only for trusted local HMR outputs that require full pickle loading") from exc
+    return torch.load(path, map_location="cpu", weights_only=False)  # nosec B614
+
+
+def _load(path: Path, allow_unsafe_deserialization: bool = False) -> Any:
     suffix = path.suffix.lower()
     if suffix == ".npz":
         with np.load(path, allow_pickle=False) as npz:
@@ -52,17 +79,11 @@ def _load(path: Path) -> Any:
     if suffix == ".json":
         return json.loads(path.read_text(encoding="utf-8"))
     if suffix in {".pkl", ".pickle"}:
-        with path.open("rb") as handle:
-            return pickle.load(handle)
+        if not allow_unsafe_deserialization:
+            raise ValueError("pickle HMR outputs can execute code while loading; pass " "allow_unsafe_deserialization=True only for trusted local files")
+        return _load_pickle(path)
     if suffix in {".pt", ".pth"}:
-        try:
-            import torch
-        except ImportError as exc:
-            raise ImportError(f"loading {suffix} HMR outputs requires PyTorch") from exc
-        try:
-            return torch.load(path, map_location="cpu", weights_only=False)
-        except TypeError:
-            return torch.load(path, map_location="cpu")
+        return _load_torch(path, allow_unsafe_deserialization)
     raise ValueError(f"unsupported HMR output suffix: {path.suffix}")
 
 
@@ -88,14 +109,16 @@ def _flatten(value: Any, prefix: str = "") -> dict[str, np.ndarray]:
         for key, child in value.items():
             out.update(_flatten(child, f"{prefix}.{key}" if prefix else str(key)))
         return out
+    arr = _to_numpy(value)
+    if prefix and arr is not None:
+        return {prefix: arr}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, np.ndarray)):
         out = {}
         for idx, child in enumerate(value):
             out.update(_flatten(child, f"{prefix}.{idx}" if prefix else str(idx)))
         if out:
             return out
-    arr = _to_numpy(value)
-    return {prefix: arr} if prefix and arr is not None else {}
+    return {}
 
 
 def _leaf(key: str) -> str:
@@ -274,12 +297,17 @@ def load_hmr_measurements(
     confidence_scale: float = 1.0,
     pad_missing_joints: bool = True,
     name: str | None = None,
+    allow_unsafe_deserialization: bool = False,
 ) -> list[ImportedMeasurements]:
     """Load one HMR/HPS result file into standardized detector measurements."""
     if pose_frame not in FRAME_GROUPS:
         raise ValueError(f"pose_frame must be one of {sorted(FRAME_GROUPS)}")
     path = Path(path)
-    tracks = _tracks(_load(path), name or path.stem, pose_frame)
+    tracks = _tracks(
+        _load(path, allow_unsafe_deserialization=allow_unsafe_deserialization),
+        name or path.stem,
+        pose_frame,
+    )
     if not tracks:
         raise ValueError(f"no usable HMR pose track found in {path}")
     out = []
@@ -320,6 +348,7 @@ def load_hmr_measurement_dataset(
     confidence_scale: float = 1.0,
     pad_missing_joints: bool = True,
     max_files: int | None = None,
+    allow_unsafe_deserialization: bool = False,
 ) -> dict[str, ImportedMeasurements]:
     files = find_hmr_measurement_files(data_root, dataset_subset)
     if max_files is not None:
@@ -336,6 +365,7 @@ def load_hmr_measurement_dataset(
                 pose_frame=pose_frame,
                 confidence_scale=confidence_scale,
                 pad_missing_joints=pad_missing_joints,
+                allow_unsafe_deserialization=allow_unsafe_deserialization,
             ):
                 measurements[measurement.name] = measurement
         except Exception as exc:  # Keep scanning mixed output directories.

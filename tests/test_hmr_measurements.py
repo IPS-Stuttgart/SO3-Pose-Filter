@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import pickle
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
 from _path import SRC  # noqa: F401
+
 from pose_filter.hmr_measurements import load_hmr_measurements
 from pose_filter.so3 import axis_angle_to_matrix
 
@@ -21,9 +22,17 @@ def _body_pose(frames: int, joints: int) -> np.ndarray:
 
 
 class HMRMeasurementTests(unittest.TestCase):
-    def test_loads_nested_gvhmr_style_body_pose_and_pads_21_joints(self) -> None:
+    def test_rejects_pickle_without_explicit_trusted_opt_in(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "seq.pkl"
+            path.write_bytes(b"unused")
+
+            with self.assertRaisesRegex(ValueError, "allow_unsafe_deserialization=True"):
+                load_hmr_measurements(path)
+
+    def test_loads_nested_gvhmr_style_body_pose_and_pads_21_joints(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "seq.json"
             body_pose = _body_pose(7, 21).reshape(7, 63)
             confidence = np.ones((7, 21), dtype=np.float64)
             confidence[2, 5] = 0.0
@@ -39,8 +48,7 @@ class HMRMeasurementTests(unittest.TestCase):
                     "body_pose": np.zeros((7, 63), dtype=np.float64),
                 },
             }
-            with path.open("wb") as handle:
-                pickle.dump(payload, handle)
+            path.write_text(json.dumps(_jsonable(payload)), encoding="utf-8")
 
             [measurement] = load_hmr_measurements(path, frame_rate=10, num_joints=23, pose_frame="global", noise_deg=8.0)
 
@@ -69,6 +77,14 @@ class HMRMeasurementTests(unittest.TestCase):
             self.assertTrue(np.allclose(measurement.observations[:, 0], expected_first_body_joint))
             self.assertTrue(np.all(measurement.mask))
             self.assertIn("pred_rotmat", measurement.source)
+
+
+def _jsonable(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, dict):
+        return {key: _jsonable(child) for key, child in value.items()}
+    return value
 
 
 if __name__ == "__main__":
