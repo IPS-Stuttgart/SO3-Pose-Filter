@@ -15,7 +15,7 @@ from .particle_filter import (
     systematic_resample,
 )
 from .quaternion import quaternions_to_rotations, rotations_to_quaternions
-from .so3 import geodesic_distance, left_apply_delta, left_delta
+from .so3 import left_apply_delta, left_delta
 from .transitions import TransitionModel
 
 
@@ -25,21 +25,12 @@ def _import_pyrecest_filters():
             PartitionedSO3ProductParticleFilter,
             SO3ProductParticleFilter,
         )
-    except ImportError as exc:
-        try:
-            from pyrecest.filters.partitioned_so3_product_particle_filter import (
-                PartitionedSO3ProductParticleFilter,
-            )
-            from pyrecest.filters.so3_product_particle_filter import (
-                SO3ProductParticleFilter,
-            )
-        except ImportError:
-            raise ImportError(
-                "filter_backend='pyrecest' requires PyRecEst with "
-                "SO3ProductParticleFilter and PartitionedSO3ProductParticleFilter "
-                "available. Install PyRecEst main or a release containing the "
-                "SO(3)^K log-likelihood particle-filter APIs."
-            ) from exc
+    except ImportError as exc:  # pragma: no cover - depends on optional upstream install
+        raise ImportError(
+            "filter_backend='pyrecest' requires PyRecEst main, or a release with "
+            "the public SO3ProductParticleFilter and "
+            "PartitionedSO3ProductParticleFilter exports."
+        ) from exc
     return SO3ProductParticleFilter, PartitionedSO3ProductParticleFilter
 
 
@@ -56,116 +47,41 @@ def _import_pyrecest_partitioned_filter():
 def is_pyrecest_filter_available() -> bool:
     """Return whether the PyRecEst SO(3)^K particle filter backend is importable."""
     try:
-        _import_pyrecest_filter()
+        filter_cls = _import_pyrecest_filter()
     except ImportError:
         return False
-    return True
+    return hasattr(filter_cls, "update_with_geodesic_log_likelihood")
 
 
 def is_pyrecest_partitioned_filter_available() -> bool:
     """Return whether the PyRecEst partitioned SO(3)^K particle filter is importable."""
     try:
-        _import_pyrecest_partitioned_filter()
+        filter_cls = _import_pyrecest_partitioned_filter()
     except ImportError:
         return False
-    return True
+    return hasattr(filter_cls, "update_with_geodesic_log_likelihood")
 
 
 def _as_numpy(value) -> np.ndarray:
     return np.asarray(value, dtype=np.float64)
 
 
-def _component_geodesic_log_likelihood(
-    filter_state,
+def _geodesic_update_kwargs(
     observation: np.ndarray,
     mask: np.ndarray,
     confidence: np.ndarray,
     noise_sigma_rad: float,
     joint_noise_sigma_rad: np.ndarray,
-) -> np.ndarray:
-    """Evaluate PyRecEst's component SO(3)^K geodesic log likelihood."""
-    if hasattr(filter_state, "component_geodesic_log_likelihood"):
-        return _as_numpy(
-            filter_state.component_geodesic_log_likelihood(
-                rotations_to_quaternions(observation),
-                noise_sigma_rad,
-                component_noise_std=joint_noise_sigma_rad,
-                mask=mask.astype(np.float64),
-                confidence=confidence,
-            )
-        )
-
-    particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
-    dist = geodesic_distance(particles, observation)
-    return -0.5 * confidence[None, :] * (dist / joint_noise_sigma_rad[None, :]) ** 2
-
-
-def _update_product_with_geodesic_log_likelihood(
-    filter_state,
-    observation: np.ndarray,
-    mask: np.ndarray,
-    confidence: np.ndarray,
-    noise_sigma_rad: float,
-    joint_noise_sigma_rad: np.ndarray,
-) -> tuple[np.ndarray, float]:
-    """Update global PyRecEst weights using log-domain PyRecEst APIs."""
-    if hasattr(filter_state, "update_with_geodesic_log_likelihood"):
-        ess = filter_state.update_with_geodesic_log_likelihood(
-            rotations_to_quaternions(observation),
-            noise_sigma_rad,
-            component_noise_std=joint_noise_sigma_rad,
-            mask=mask.astype(np.float64),
-            confidence=confidence,
-            resample=False,
-        )
-    else:
-        joint_ll = _component_geodesic_log_likelihood(
-            filter_state,
-            observation,
-            mask,
-            confidence,
-            noise_sigma_rad,
-            joint_noise_sigma_rad,
-        )
-        ess = filter_state.update_with_log_likelihood(
-            np.sum(joint_ll, axis=-1),
-            resample=False,
-        )
-    return _as_numpy(filter_state.weights), float(np.asarray(ess))
-
-
-def _update_partitioned_with_geodesic_log_likelihood(
-    filter_state,
-    observation: np.ndarray,
-    mask: np.ndarray,
-    confidence: np.ndarray,
-    noise_sigma_rad: float,
-    joint_noise_sigma_rad: np.ndarray,
-) -> np.ndarray:
-    """Update partitioned PyRecEst block weights using component log likelihoods."""
-    if hasattr(filter_state, "update_with_geodesic_log_likelihood"):
-        ess = filter_state.update_with_geodesic_log_likelihood(
-            rotations_to_quaternions(observation),
-            noise_sigma_rad,
-            component_noise_std=joint_noise_sigma_rad,
-            mask=mask.astype(np.float64),
-            confidence=confidence,
-            resample=False,
-        )
-    else:
-        joint_ll = _component_geodesic_log_likelihood(
-            filter_state,
-            observation,
-            mask,
-            confidence,
-            noise_sigma_rad,
-            joint_noise_sigma_rad,
-        )
-        ess = filter_state.update_with_component_log_likelihoods(
-            joint_ll,
-            resample=False,
-        )
-    return _as_numpy(ess).reshape(-1)
+) -> dict[str, object]:
+    """Build keyword arguments for PyRecEst's SO(3)^K geodesic update API."""
+    return {
+        "measurement": rotations_to_quaternions(observation),
+        "noise_std": noise_sigma_rad,
+        "component_noise_std": joint_noise_sigma_rad,
+        "mask": mask.astype(np.float64),
+        "confidence": confidence,
+        "resample": False,
+    }
 
 
 def _resolve_pyrecest_partition(
@@ -315,25 +231,31 @@ def run_pyrecest_particle_filter(
 
         particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
         if is_partitioned:
-            ess_per_block = _update_partitioned_with_geodesic_log_likelihood(
-                filter_state,
-                observations[t],
-                mask[t],
-                confidence[t],
-                noise_sigma_rad,
-                joint_noise_sigma_rad[t],
-            )
+            ess_per_block = _as_numpy(
+                filter_state.update_with_geodesic_log_likelihood(
+                    **_geodesic_update_kwargs(
+                        observations[t],
+                        mask[t],
+                        confidence[t],
+                        noise_sigma_rad,
+                        joint_noise_sigma_rad[t],
+                    )
+                )
+            ).reshape(-1)
             estimate_array = quaternions_to_rotations(_as_numpy(filter_state.mean()))
             ess = float(np.mean(ess_per_block))
         else:
-            weights, ess = _update_product_with_geodesic_log_likelihood(
-                filter_state,
-                observations[t],
-                mask[t],
-                confidence[t],
-                noise_sigma_rad,
-                joint_noise_sigma_rad[t],
+            ess = filter_state.update_with_geodesic_log_likelihood(
+                **_geodesic_update_kwargs(
+                    observations[t],
+                    mask[t],
+                    confidence[t],
+                    noise_sigma_rad,
+                    joint_noise_sigma_rad[t],
+                )
             )
+            weights = _as_numpy(filter_state.weights)
+            ess = float(np.asarray(ess))
             estimate_array = quaternions_to_rotations(_as_numpy(filter_state.mean()))
 
         estimates.append(estimate_array)
