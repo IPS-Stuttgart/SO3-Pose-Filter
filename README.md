@@ -114,6 +114,10 @@ The KIT sample smoke workflow uses the same rclone/WebDAV downloader with the `K
 for a cheap smoke experiment, and validates the standard SO(3) filtering path. This gives every PR a small
 second-dataset check without downloading or evaluating the full KIT motion dataset.
 
+For a full KIT run, the manual `Full-Data KIT Motion-Stratified Benchmark` workflow mirrors the ACCAD full-data
+workflow: it runs only on a self-hosted runner, populates a persistent KIT cache from the WebDAV share, evaluates
+`configs/private_kit_eval.example.json`, and uploads only the sanitized paper artifact package.
+
 For a local ACCAD run on a full dataset checkout, first select a bounded set of dynamic windows and then
 run the dynamic benchmark config:
 

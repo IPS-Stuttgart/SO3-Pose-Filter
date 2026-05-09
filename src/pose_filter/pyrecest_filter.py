@@ -266,7 +266,10 @@ def run_pyrecest_particle_filter(
             resample_blocks = ess_per_block < resample_threshold * num_particles
             resampled_flags.append(bool(np.any(resample_blocks)))
             if t < t_steps - 1 and bool(np.any(resample_blocks)):
-                assert partition is not None
+                if partition is None:
+                    raise RuntimeError(
+                        "partitioned filters require a joint partition for resampling"
+                    )
                 _resample_partitioned_filter(
                     filter_state,
                     particle_history,

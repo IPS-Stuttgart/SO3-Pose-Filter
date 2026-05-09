@@ -77,6 +77,8 @@ jobs:
 
       - name: Resolve ACCAD sample cache path
         id: accad-sample-cache-path
+        env:
+          SAMPLE_FILE_COUNT: ${{ inputs.sample_file_count }}
         run: |
           set -euo pipefail
           if [ -z "${DATA_ROOT:-}" ]; then
@@ -90,15 +92,15 @@ jobs:
               echo "data_root is required when download_sample=false" >&2
               exit 2
             fi
-          elif [[ "${DATA_ROOT}" == "~/"* ]]; then
-            DATA_ROOT="${HOME}/${DATA_ROOT#~/}"
-          elif [[ "${DATA_ROOT}" == "\$HOME/"* ]]; then
+          elif [ "${DATA_ROOT#\~/}" != "${DATA_ROOT}" ]; then
+            DATA_ROOT="${HOME}/${DATA_ROOT#\~/}"
+          elif [ "${DATA_ROOT#\$HOME/}" != "${DATA_ROOT}" ]; then
             DATA_ROOT="${HOME}/${DATA_ROOT#\$HOME/}"
           fi
 
           mkdir -p "${DATA_ROOT}"
           sample_count="$(find "${DATA_ROOT}" -maxdepth 1 -type f -name '*.npz' | wc -l | tr -d ' ')"
-          if [ "${sample_count}" -ge "${{ inputs.sample_file_count }}" ]; then
+          if [ "${sample_count}" -ge "${SAMPLE_FILE_COUNT}" ]; then
             echo "local-cache-hit=true" >> "$GITHUB_OUTPUT"
             echo "ACCAD sample cache hit at ${DATA_ROOT} (${sample_count} files)"
           else

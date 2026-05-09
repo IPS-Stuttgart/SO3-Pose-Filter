@@ -392,8 +392,9 @@ def _benchmark_config(
 
 def _write_markdown_summary(path: Path, summary: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_name = str(summary.get("dataset_name", "ACCAD"))
     lines = [
-        "# Motion-Stratified Private ACCAD Evaluation",
+        f"# Motion-Stratified Private {dataset_name} Evaluation",
         "",
         "Generated outputs are local artifacts and should stay under ignored output folders.",
         "",
@@ -444,6 +445,7 @@ def run_motion_stratified_private_accad_eval(
     )
     segments_dir = _as_path(config.get("segments_dir", out_dir / "segments"))
     out_dir.mkdir(parents=True, exist_ok=True)
+    dataset_name = str(config.get("dataset_name", "ACCAD"))
 
     if prepare:
         window_report = prepare_windows(
@@ -575,6 +577,7 @@ def run_motion_stratified_private_accad_eval(
         bin_name: len(windows) for bin_name, windows in grouped_windows.items()
     }
     summary = {
+        "dataset_name": dataset_name,
         "source_data_root": str(root),
         "output_dir": str(out_dir),
         "segments_dir": str(segments_dir),
@@ -618,10 +621,10 @@ def run_motion_stratified_private_accad_eval(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run motion-stratified private ACCAD evaluation into ignored local output folders."
+        description="Run motion-stratified private AMASS evaluation into ignored local output folders."
     )
     parser.add_argument("--config", required=True, help="Path to JSON config.")
-    parser.add_argument("--data-root", default=None, help="Override source AMASS/ACCAD root from config.")
+    parser.add_argument("--data-root", default=None, help="Override source AMASS root from config.")
     parser.add_argument("--output", default=None, help="Override output directory from config.")
     parser.add_argument(
         "--skip-prepare",
