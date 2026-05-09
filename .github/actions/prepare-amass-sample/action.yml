@@ -1,0 +1,186 @@
+name: Prepare AMASS sample
+description: Restore, download, cache, validate, and report an ACCAD/KIT AMASS sample.
+
+inputs:
+  output-dir:
+    description: Sample directory override. Leave empty to use runner-appropriate defaults.
+    required: false
+    default: ""
+  default-output-dir:
+    description: Workspace sample directory used on GitHub-hosted runners.
+    required: true
+  self-hosted-cache-dir:
+    description: Persistent sample directory used on self-hosted runners when output-dir is empty.
+    required: false
+    default: ""
+  report-path:
+    description: JSON report path expected by downstream workflow steps.
+    required: true
+  max-files:
+    description: Number of valid AMASS .npz files required.
+    required: false
+    default: "1"
+  cache-key:
+    description: GitHub Actions cache key for GitHub-hosted runners.
+    required: true
+  webdav-url-env:
+    description: Environment variable containing the WebDAV URL.
+    required: true
+  key-env:
+    description: Environment variable containing the WebDAV public-share user/token.
+    required: true
+  password-env:
+    description: Environment variable containing the WebDAV public-share password.
+    required: true
+  source-name:
+    description: Sanitized source label written to the report.
+    required: true
+  export-env-name:
+    description: Optional environment variable name to export with the resolved sample directory.
+    required: false
+    default: DATA_ROOT
+
+outputs:
+  sample-dir:
+    description: Resolved sample directory.
+    value: ${{ steps.resolve.outputs.sample-dir }}
+  cache-hit:
+    description: Whether a local or Actions cache hit supplied the sample.
+    value: ${{ steps.resolve.outputs.local-cache-hit == 'true' || steps.restore.outputs.cache-hit == 'true' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve sample cache path
+      id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+        sample_dir="${{ inputs.output-dir }}"
+        if [ -z "${sample_dir}" ]; then
+          if [ "${RUNNER_ENVIRONMENT:-}" = "self-hosted" ]; then
+            sample_dir="${{ inputs.self-hosted-cache-dir }}"
+            if [ -z "${sample_dir}" ]; then
+              sample_dir="${HOME}/.cache/datasets/so3-pose-filter/amass-sample"
+            fi
+          else
+            sample_dir="${{ inputs.default-output-dir }}"
+          fi
+        elif [[ "${sample_dir}" == "~/"* ]]; then
+          sample_dir="${HOME}/${sample_dir#~/}"
+        elif [[ "${sample_dir}" == "\$HOME/"* ]]; then
+          sample_dir="${HOME}/${sample_dir#\$HOME/}"
+        fi
+
+        mkdir -p "${sample_dir}"
+        sample_count="$(find "${sample_dir}" -maxdepth 1 -type f -name '*.npz' | wc -l | tr -d ' ')"
+        if [ "${sample_count}" -ge "${{ inputs.max-files }}" ]; then
+          echo "local-cache-hit=true" >> "$GITHUB_OUTPUT"
+          echo "AMASS sample cache hit at ${sample_dir} (${sample_count} files)"
+        else
+          echo "local-cache-hit=false" >> "$GITHUB_OUTPUT"
+          echo "AMASS sample cache miss at ${sample_dir} (${sample_count} files)"
+        fi
+        echo "sample-dir=${sample_dir}" >> "$GITHUB_OUTPUT"
+        if [ -n "${{ inputs.export-env-name }}" ]; then
+          echo "${{ inputs.export-env-name }}=${sample_dir}" >> "$GITHUB_ENV"
+        fi
+
+    - name: Restore AMASS sample cache
+      id: restore
+      if: ${{ runner.environment != 'self-hosted' && steps.resolve.outputs.local-cache-hit != 'true' }}
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.resolve.outputs.sample-dir }}
+        key: ${{ inputs.cache-key }}
+
+    - name: Install rclone without sudo
+      if: ${{ steps.resolve.outputs.local-cache-hit != 'true' && (runner.environment == 'self-hosted' || steps.restore.outputs.cache-hit != 'true') }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v rclone >/dev/null 2>&1; then
+          mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
+          curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+            -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+          python -m zipfile -e \
+            "$RUNNER_TEMP/rclone-download/rclone.zip" \
+            "$RUNNER_TEMP/rclone-download/extract"
+          RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
+          if [ -z "$RCLONE_BIN" ]; then
+            echo "Downloaded rclone archive did not contain rclone binary" >&2
+            exit 1
+          fi
+          cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
+          chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
+          echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+        fi
+        rclone version
+
+    - name: Download AMASS sample
+      if: ${{ steps.resolve.outputs.local-cache-hit != 'true' && (runner.environment == 'self-hosted' || steps.restore.outputs.cache-hit != 'true') }}
+      shell: bash
+      env:
+        SAMPLE_DIR: ${{ steps.resolve.outputs.sample-dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "${SAMPLE_DIR}" "$(dirname "${{ inputs.report-path }}")"
+        python scripts/download_webdav_amass_sample.py \
+          --output-dir "${SAMPLE_DIR}" \
+          --report "${{ inputs.report-path }}" \
+          --max-files "${{ inputs.max-files }}" \
+          --webdav-url-env "${{ inputs.webdav-url-env }}" \
+          --key-env "${{ inputs.key-env }}" \
+          --password-env "${{ inputs.password-env }}" \
+          --source-name "${{ inputs.source-name }}"
+
+    - name: Write AMASS sample cache report
+      if: ${{ steps.resolve.outputs.local-cache-hit == 'true' || steps.restore.outputs.cache-hit == 'true' }}
+      shell: bash
+      env:
+        SAMPLE_DIR: ${{ steps.resolve.outputs.sample-dir }}
+      run: |
+        set -euo pipefail
+        python - <<'PY'
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, "scripts")
+        from download_amass_sample import is_amass_npz
+
+        sample_dir = Path(os.environ["SAMPLE_DIR"])
+        max_files = int("${{ inputs.max-files }}")
+        files = sorted(sample_dir.glob("*.npz"))
+        if len(files) < max_files:
+            raise SystemExit(f"AMASS sample cache hit but only {len(files)} .npz files were found in {sample_dir}")
+
+        records = []
+        for path in files[:max_files]:
+            ok, metadata = is_amass_npz(path)
+            if not ok:
+                raise SystemExit(f"Cached AMASS sample is not valid: {path}; metadata={metadata}")
+            records.append({"sample_path": str(path), "metadata": metadata})
+
+        report = {
+            "source": "${{ inputs.source-name }}",
+            "cache_hit": True,
+            "selected_count": len(records),
+            "files": records,
+            "errors": [],
+        }
+        report_path = Path("${{ inputs.report-path }}")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps(report, indent=2))
+        PY
+
+    - name: Save AMASS sample cache
+      if: ${{ runner.environment != 'self-hosted' && steps.resolve.outputs.local-cache-hit != 'true' && steps.restore.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v5
+      continue-on-error: true
+      with:
+        path: ${{ steps.resolve.outputs.sample-dir }}
+        key: ${{ inputs.cache-key }}
