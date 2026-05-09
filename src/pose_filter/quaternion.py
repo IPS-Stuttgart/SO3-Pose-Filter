@@ -7,7 +7,6 @@ from typing import Any
 import numpy as np
 from pyrecest.distributions import (  # type: ignore[import-untyped]
     ConversionError,
-    SO3DiracDistribution,
     SO3ProductDiracDistribution,
     convert_distribution,
 )
@@ -31,8 +30,8 @@ def canonicalize_quaternions(quaternions: np.ndarray) -> np.ndarray:
         raise ValueError(f"expected quaternions shaped (..., 4), got {q.shape}")
 
     try:
-        canonical = SO3DiracDistribution(q.reshape((-1, 4))).as_quaternions()
-    except AssertionError as exc:
+        canonical = SO3ProductDiracDistribution(q.reshape((-1, 1, 4))).as_quaternions()
+    except (AssertionError, ValueError) as exc:
         raise ValueError(str(exc)) from exc
 
     return _as_numpy(canonical).reshape(q.shape)
@@ -58,14 +57,7 @@ def _as_product_rotation_particles(rotations: np.ndarray) -> tuple[np.ndarray, t
 def rotations_to_quaternions(rotations: np.ndarray) -> np.ndarray:
     """Convert rotation matrices shaped `(..., 3, 3)` to scalar-last quaternions."""
     product_particles, output_shape = _as_product_rotation_particles(rotations)
-    from_rotation_matrices = getattr(SO3ProductDiracDistribution, "from_rotation_matrices", None)
-    if not callable(from_rotation_matrices):
-        raise ImportError(
-            "rotations_to_quaternions requires PyRecEst with "
-            "SO3ProductDiracDistribution.from_rotation_matrices available"
-        )
-
-    distribution = from_rotation_matrices(product_particles)
+    distribution = SO3ProductDiracDistribution.from_rotation_matrices(product_particles)
     quaternions = _as_numpy(distribution.as_quaternions()).reshape(output_shape + (4,))
     return canonicalize_quaternions(quaternions)
 
