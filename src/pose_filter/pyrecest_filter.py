@@ -35,6 +35,22 @@ def _import_pyrecest_filter():
     return SO3ProductParticleFilter
 
 
+def _import_pyrecest_partitioned_filter():
+    try:
+        from pyrecest.filters import PartitionedSO3ProductParticleFilter
+    except ImportError as exc:
+        try:
+            from pyrecest.filters.partitioned_so3_product_particle_filter import (
+                PartitionedSO3ProductParticleFilter,
+            )
+        except ImportError:
+            raise ImportError(
+                "filter_backend='pyrecest' with particle_blocks requires PyRecEst "
+                "with pyrecest.filters.PartitionedSO3ProductParticleFilter available."
+            ) from exc
+    return PartitionedSO3ProductParticleFilter
+
+
 def is_pyrecest_filter_available() -> bool:
     """Return whether the PyRecEst SO(3)^K particle filter backend is importable."""
     try:
@@ -44,8 +60,29 @@ def is_pyrecest_filter_available() -> bool:
     return True
 
 
+def is_pyrecest_partitioned_filter_available() -> bool:
+    """Return whether the PyRecEst partitioned SO(3)^K particle filter is importable."""
+    try:
+        _import_pyrecest_partitioned_filter()
+    except ImportError:
+        return False
+    return True
+
+
 def _as_numpy(value) -> np.ndarray:
     return np.asarray(value, dtype=np.float64)
+
+
+def _resample_product_block_in_place(
+    particles: np.ndarray,
+    particle_history: list[np.ndarray],
+    block: tuple[int, ...],
+    indices: np.ndarray,
+) -> None:
+    block_indices = np.asarray(block, dtype=np.int64)
+    particles[:, block_indices] = particles[indices][:, block_indices]
+    for history_entry in particle_history:
+        history_entry[:, block_indices] = history_entry[indices][:, block_indices]
 
 
 def _component_geodesic_log_likelihood(
@@ -125,18 +162,17 @@ def run_pyrecest_particle_filter(
     proposal_gain: float = 0.2,
     confidence: np.ndarray | None = None,
     joint_noise_sigma_rad: np.ndarray | None = None,
+    particle_blocks=None,
 ) -> ParticleFilterResult:
     """Run the SO(3)^K particle filter using PyRecEst quaternion product particles.
 
     The surrounding prototype stores rotations as matrices. This adapter keeps
     transition models and metrics in that representation while using PyRecEst's
-    ``SO3ProductParticleFilter`` as the particle-state backend.  Measurement
+    SO(3)^K particle filters as the particle-state backend.  Measurement
     scoring is delegated to PyRecEst's SO(3)^K geodesic log-likelihood helpers
     when available, including masks, confidence values, and heteroskedastic
     per-joint noise scales.
     """
-    SO3ProductParticleFilter = _import_pyrecest_filter()
-
     observations = np.asarray(observations, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
     confidence = _prepare_confidence(mask, confidence)
@@ -147,16 +183,37 @@ def run_pyrecest_particle_filter(
     initial_rotations = initialize_particles(
         observations[0], confidence[0] > 0.0, num_particles, noise_sigma_rad, rng
     )
-    filter_state = SO3ProductParticleFilter(
-        int(num_particles),
-        int(num_joints),
-        initial_particles=rotations_to_quaternions(initial_rotations),
-    )
+    initial_quaternions = rotations_to_quaternions(initial_rotations)
+
+    blocks: tuple[tuple[int, ...], ...] | None = None
+    if particle_blocks is not None:
+        from .block_particle_filter import resolve_particle_blocks
+
+        blocks = resolve_particle_blocks(num_joints, particle_blocks)
+        filter_class = _import_pyrecest_partitioned_filter()
+        filter_state = filter_class(
+            int(num_particles),
+            int(num_joints),
+            partition=blocks,
+            initial_particles=initial_quaternions,
+        )
+    else:
+        filter_class = _import_pyrecest_filter()
+        filter_state = filter_class(
+            int(num_particles),
+            int(num_joints),
+            initial_particles=initial_quaternions,
+        )
 
     log_weights = np.full(num_particles, -np.log(num_particles), dtype=np.float64)
     log_joint_weights = np.full(
         (num_particles, num_joints), -np.log(num_particles), dtype=np.float64
     )
+    log_block_weights = None
+    if blocks is not None:
+        log_block_weights = np.full(
+            (len(blocks), num_particles), -np.log(num_particles), dtype=np.float64
+        )
     estimates = []
     ess_values = []
     resampled_flags = []
@@ -190,7 +247,24 @@ def run_pyrecest_particle_filter(
             joint_noise_sigma_rad[t],
         )
 
-        if factorized_update:
+        if blocks is not None:
+            assert log_block_weights is not None
+            block_weights = np.empty((len(blocks), num_particles), dtype=np.float64)
+            for block_idx, block in enumerate(blocks):
+                block_ll = np.sum(joint_ll[:, block], axis=-1)
+                block_weights[block_idx], log_block_weights[block_idx] = _normalize_log_weights(
+                    log_block_weights[block_idx] + block_ll
+                )
+            filter_state.set_block_weights(block_weights)
+
+            estimate_array = quaternions_to_rotations(_as_numpy(filter_state.mean()))
+            estimates.append(estimate_array)
+            ess_per_block = _as_numpy(filter_state.block_effective_sample_size())
+            ess = float(np.mean(ess_per_block))
+            weights = np.mean(block_weights, axis=0)
+            weights = weights / np.sum(weights)
+            log_weights = np.log(weights + 1e-300)
+        elif factorized_update:
             joint_weights, log_joint_weights = _normalize_log_weights_axis0(
                 log_joint_weights + joint_ll
             )
@@ -227,22 +301,42 @@ def run_pyrecest_particle_filter(
 
         spread_values.append(_particle_spread_deg(particles, estimate_array))
         ess_values.append(ess)
-        should_resample = ess < resample_threshold * num_particles
-        resampled_flags.append(should_resample)
+        if blocks is not None:
+            resample_blocks = ess_per_block < resample_threshold * num_particles
+            should_resample = bool(np.any(resample_blocks))
+        else:
+            resample_blocks = None
+            should_resample = ess < resample_threshold * num_particles
+        resampled_flags.append(bool(should_resample))
         if should_resample and t < t_steps - 1:
-            idx = systematic_resample(weights, rng)
-            particles = _as_numpy(filter_state.particles)[idx]
-            particle_history = [entry[idx] for entry in particle_history]
-            filter_state.set_particles(
-                particles,
-                weights=np.full(num_particles, 1.0 / num_particles, dtype=np.float64),
-            )
-            log_weights = np.full(
-                num_particles, -np.log(num_particles), dtype=np.float64
-            )
-            log_joint_weights = np.full(
-                (num_particles, num_joints), -np.log(num_particles), dtype=np.float64
-            )
+            if blocks is not None:
+                assert log_block_weights is not None
+                particles = _as_numpy(filter_state.particles).copy()
+                block_weights = _as_numpy(filter_state.block_weights).copy()
+                for block_idx, should_resample_block in enumerate(resample_blocks):
+                    if not bool(should_resample_block):
+                        continue
+                    idx = systematic_resample(block_weights[block_idx], rng)
+                    _resample_product_block_in_place(
+                        particles, particle_history, blocks[block_idx], idx
+                    )
+                    block_weights[block_idx] = 1.0 / num_particles
+                    log_block_weights[block_idx] = -np.log(num_particles)
+                filter_state.set_particles(particles, block_weights=block_weights)
+            else:
+                idx = systematic_resample(weights, rng)
+                particles = _as_numpy(filter_state.particles)[idx]
+                particle_history = [entry[idx] for entry in particle_history]
+                filter_state.set_particles(
+                    particles,
+                    weights=np.full(num_particles, 1.0 / num_particles, dtype=np.float64),
+                )
+                log_weights = np.full(
+                    num_particles, -np.log(num_particles), dtype=np.float64
+                )
+                log_joint_weights = np.full(
+                    (num_particles, num_joints), -np.log(num_particles), dtype=np.float64
+                )
 
         if t < t_steps - 1:
             particle_history.append(
