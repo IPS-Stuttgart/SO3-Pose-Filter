@@ -269,8 +269,6 @@ def run_filter(
             particle_blocks=particle_blocks,
         )
     if backend == "pyrecest":
-        if particle_blocks is not None:
-            raise ValueError("particle_blocks is currently supported only for filter_backend='numpy'")
         from .pyrecest_filter import run_pyrecest_particle_filter
 
         return run_pyrecest_particle_filter(
@@ -285,5 +283,6 @@ def run_filter(
             proposal_gain=proposal_gain,
             confidence=confidence,
             joint_noise_sigma_rad=joint_noise_sigma_rad,
+            particle_blocks=particle_blocks,
         )
     raise ValueError(f"unknown filter_backend: {backend}")
