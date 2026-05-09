@@ -57,6 +57,9 @@ runs:
       run: |
         set -euo pipefail
         sample_dir="${{ inputs.output-dir }}"
+        tilde_prefix="~/"
+        home_prefix='$HOME/'
+        max_files="${{ inputs.max-files }}"
         if [ -z "${sample_dir}" ]; then
           if [ "${RUNNER_ENVIRONMENT:-}" = "self-hosted" ]; then
             sample_dir="${{ inputs.self-hosted-cache-dir }}"
@@ -66,15 +69,15 @@ runs:
           else
             sample_dir="${{ inputs.default-output-dir }}"
           fi
-        elif [[ "${sample_dir}" == "~/"* ]]; then
-          sample_dir="${HOME}/${sample_dir#~/}"
-        elif [[ "${sample_dir}" == "\$HOME/"* ]]; then
-          sample_dir="${HOME}/${sample_dir#\$HOME/}"
+        elif [[ "${sample_dir}" == "${tilde_prefix}"* ]]; then
+          sample_dir="${HOME}/${sample_dir#"${tilde_prefix}"}"
+        elif [[ "${sample_dir}" == "${home_prefix}"* ]]; then
+          sample_dir="${HOME}/${sample_dir#"${home_prefix}"}"
         fi
 
         mkdir -p "${sample_dir}"
         sample_count="$(find "${sample_dir}" -maxdepth 1 -type f -name '*.npz' | wc -l | tr -d ' ')"
-        if [ "${sample_count}" -ge "${{ inputs.max-files }}" ]; then
+        if [ "${sample_count}" -ge "${max_files}" ]; then
           echo "local-cache-hit=true" >> "$GITHUB_OUTPUT"
           echo "AMASS sample cache hit at ${sample_dir} (${sample_count} files)"
         else
