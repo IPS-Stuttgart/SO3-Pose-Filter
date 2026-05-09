@@ -1,0 +1,420 @@
+name: HMR Measurement Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label for private data access.
+        required: true
+        default: self-hosted
+      config_path:
+        description: Base detector-measurement eval config to patch for this run.
+        required: true
+        default: configs/hmr_measurements.example.json
+      truth_data_root:
+        description: Optional AMASS/SMPL ground-truth root on the runner. If empty, secret HMR_TRUTH_DATA_ROOT is used.
+        required: false
+        default: ""
+      hmr_output_root:
+        description: Optional raw HMR/HPS output root on the runner. If empty, secret HMR_OUTPUT_ROOT is used.
+        required: false
+        default: ""
+      output_dir:
+        description: Local evaluation output directory.
+        required: true
+        default: runs/hmr_measurement_eval
+      standardized_measurement_dir:
+        description: Local directory for standardized HMR measurement bundles.
+        required: true
+        default: runs/hmr_standardized_measurements
+      artifact_name_prefix:
+        description: Prefix for the uploaded sanitized metrics artifact.
+        required: true
+        default: hmr-measurement-eval
+      artifact_retention_days:
+        description: Number of days to retain the uploaded artifact.
+        required: true
+        default: "30"
+      frame_rate:
+        description: Target frame rate for truth and HMR measurements.
+        required: true
+        default: "20"
+      num_joints:
+        description: Number of local body joints used by the SO(3)^K filter.
+        required: true
+        default: "23"
+      noise_deg:
+        description: Fallback HMR measurement noise in degrees.
+        required: true
+        default: "8.0"
+      pose_frame:
+        description: Preferred HMR pose branch.
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - global
+          - incam
+      confidence_scale:
+        description: Divide confidence values by this value before validation.
+        required: true
+        default: "1.0"
+      dataset_subset:
+        description: Optional substring filter for AMASS/SMPL truth files.
+        required: false
+        default: ""
+      measurement_dataset_subset:
+        description: Optional substring filter for raw HMR output files.
+        required: false
+        default: ""
+      max_files:
+        description: Optional cap on raw HMR files to convert. Leave empty for all.
+        required: false
+        default: ""
+      transition_model:
+        description: Transition model used by detector-measurement evaluation.
+        required: true
+        default: gaussian_rw
+      num_particles:
+        description: Particle count for filter evaluation.
+        required: true
+        default: "256"
+      filter_backend:
+        description: Particle-filter backend.
+        required: true
+        default: numpy
+        type: choice
+        options:
+          - numpy
+          - pyrecest
+      allow_missing_measurements:
+        description: Skip truth sequences that do not have matching HMR measurement files.
+        required: true
+        type: boolean
+        default: false
+      run_tests_first:
+        description: Run lightweight HMR/detector importer tests before conversion.
+        required: true
+        type: boolean
+        default: true
+      clean_output_dirs:
+        description: Remove output/standardized/artifact directories before running.
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hmr-measurement-eval-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  hmr-measurement-eval:
+    name: Convert and evaluate HMR measurements
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 1440
+    env:
+      CONFIG_PATH: ${{ inputs.config_path }}
+      TRUTH_DATA_ROOT_INPUT: ${{ inputs.truth_data_root }}
+      HMR_OUTPUT_ROOT_INPUT: ${{ inputs.hmr_output_root }}
+      SECRET_TRUTH_DATA_ROOT: ${{ secrets.HMR_TRUTH_DATA_ROOT }}
+      SECRET_HMR_OUTPUT_ROOT: ${{ secrets.HMR_OUTPUT_ROOT }}
+      OUTPUT_DIR_INPUT: ${{ inputs.output_dir }}
+      STANDARDIZED_MEASUREMENT_DIR_INPUT: ${{ inputs.standardized_measurement_dir }}
+      ARTIFACT_NAME_PREFIX: ${{ inputs.artifact_name_prefix }}
+      ARTIFACT_RETENTION_DAYS: ${{ inputs.artifact_retention_days }}
+      FRAME_RATE: ${{ inputs.frame_rate }}
+      NUM_JOINTS: ${{ inputs.num_joints }}
+      NOISE_DEG: ${{ inputs.noise_deg }}
+      POSE_FRAME: ${{ inputs.pose_frame }}
+      CONFIDENCE_SCALE: ${{ inputs.confidence_scale }}
+      DATASET_SUBSET: ${{ inputs.dataset_subset }}
+      MEASUREMENT_DATASET_SUBSET: ${{ inputs.measurement_dataset_subset }}
+      MAX_FILES: ${{ inputs.max_files }}
+      TRANSITION_MODEL: ${{ inputs.transition_model }}
+      NUM_PARTICLES: ${{ inputs.num_particles }}
+      FILTER_BACKEND: ${{ inputs.filter_backend }}
+      ALLOW_MISSING_MEASUREMENTS: ${{ inputs.allow_missing_measurements }}
+      CLEAN_OUTPUT_DIRS: ${{ inputs.clean_output_dirs }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve private data and output paths
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          repo = Path.cwd().resolve()
+
+          def resolve_private(label: str, input_name: str, secret_name: str) -> Path:
+              raw = os.environ.get(input_name, "").strip() or os.environ.get(secret_name, "").strip()
+              if not raw:
+                  raise SystemExit(f"{label} is required via workflow input or secret {secret_name}.")
+              path = Path(raw).expanduser()
+              if not path.is_absolute():
+                  path = (repo / path).resolve()
+              else:
+                  path = path.resolve()
+              if not path.exists():
+                  raise SystemExit(f"{label} path does not exist on the runner.")
+              return path
+
+          def resolve_output(label: str, env_name: str) -> Path:
+              raw = os.environ[env_name].strip()
+              if not raw:
+                  raise SystemExit(f"{label} must not be empty.")
+              path = Path(raw).expanduser()
+              if not path.is_absolute():
+                  path = (repo / path).resolve()
+              else:
+                  path = path.resolve()
+              dangerous = {repo, Path.home().resolve(), Path("/").resolve()}
+              if path in dangerous:
+                  raise SystemExit(f"Refusing to use dangerous output path for {label}.")
+              return path
+
+          truth_root = resolve_private("truth_data_root", "TRUTH_DATA_ROOT_INPUT", "SECRET_TRUTH_DATA_ROOT")
+          hmr_root = resolve_private("hmr_output_root", "HMR_OUTPUT_ROOT_INPUT", "SECRET_HMR_OUTPUT_ROOT")
+          output_dir = resolve_output("output_dir", "OUTPUT_DIR_INPUT")
+          measurement_dir = resolve_output("standardized_measurement_dir", "STANDARDIZED_MEASUREMENT_DIR_INPUT")
+          artifact_dir = (output_dir.parent / f"{output_dir.name}_sanitized_artifact").resolve()
+
+          for path in (output_dir, measurement_dir, artifact_dir):
+              if path in {truth_root, hmr_root}:
+                  raise SystemExit("Refusing to use a private input root as an output directory.")
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"TRUTH_DATA_ROOT_ABS={truth_root}\n")
+              handle.write(f"HMR_OUTPUT_ROOT_ABS={hmr_root}\n")
+              handle.write(f"OUTPUT_DIR_ABS={output_dir}\n")
+              handle.write(f"STANDARDIZED_MEASUREMENT_DIR_ABS={measurement_dir}\n")
+              handle.write(f"ARTIFACT_DIR_ABS={artifact_dir}\n")
+          print("Resolved private data roots and output directories.")
+          PY
+
+      - name: Clean previous HMR outputs
+        if: ${{ inputs.clean_output_dirs == true || inputs.clean_output_dirs == 'true' }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          protected = {
+              Path.cwd().resolve(),
+              Path(os.environ["TRUTH_DATA_ROOT_ABS"]).resolve(),
+              Path(os.environ["HMR_OUTPUT_ROOT_ABS"]).resolve(),
+              Path("/").resolve(),
+          }
+          for key in ["OUTPUT_DIR_ABS", "STANDARDIZED_MEASUREMENT_DIR_ABS", "ARTIFACT_DIR_ABS"]:
+              path = Path(os.environ[key]).resolve()
+              if path in protected:
+                  raise SystemExit(f"Refusing to remove protected path from {key}.")
+              if path.exists():
+                  shutil.rmtree(path)
+          PY
+
+      - name: Install package with Torch extra
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[torch]"
+
+      - name: Run HMR importer tests
+        if: ${{ inputs.run_tests_first == true || inputs.run_tests_first == 'true' }}
+        run: |
+          set -euo pipefail
+          python -m unittest tests.test_hmr_measurements tests.test_detector_import
+
+      - name: Convert raw HMR outputs to standardized measurements
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR_ABS" "$STANDARDIZED_MEASUREMENT_DIR_ABS"
+          max_files_args=()
+          if [ -n "$MAX_FILES" ]; then
+            max_files_args=(--max-files "$MAX_FILES")
+          fi
+          python scripts/import_hmr_measurements.py \
+            --input "$HMR_OUTPUT_ROOT_ABS" \
+            --output-dir "$STANDARDIZED_MEASUREMENT_DIR_ABS" \
+            --dataset-subset "$MEASUREMENT_DATASET_SUBSET" \
+            --frame-rate "$FRAME_RATE" \
+            --num-joints "$NUM_JOINTS" \
+            --noise-deg "$NOISE_DEG" \
+            --pose-frame "$POSE_FRAME" \
+            --confidence-scale "$CONFIDENCE_SCALE" \
+            "${max_files_args[@]}" \
+            | tee "$OUTPUT_DIR_ABS/import_hmr_measurements_summary.raw.json"
+
+      - name: Prepare detector-measurement eval config
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          config_path = Path(os.environ["CONFIG_PATH"])
+          config = json.loads(config_path.read_text(encoding="utf-8"))
+          config.update(
+              {
+                  "data_root": os.environ["TRUTH_DATA_ROOT_ABS"],
+                  "dataset_subset": os.environ.get("DATASET_SUBSET", ""),
+                  "measurement_data_root": os.environ["STANDARDIZED_MEASUREMENT_DIR_ABS"],
+                  "measurement_dataset_subset": "",
+                  "frame_rate": int(os.environ["FRAME_RATE"]),
+                  "num_joints": int(os.environ["NUM_JOINTS"]),
+                  "measurement_noise_deg": float(os.environ["NOISE_DEG"]),
+                  "num_particles": int(os.environ["NUM_PARTICLES"]),
+                  "transition_model": os.environ["TRANSITION_MODEL"],
+                  "filter_backend": os.environ["FILTER_BACKEND"],
+                  "output_dir": os.environ["OUTPUT_DIR_ABS"],
+                  "allow_missing_measurements": os.environ["ALLOW_MISSING_MEASUREMENTS"].lower() == "true",
+              }
+          )
+          prepared = Path(os.environ["OUTPUT_DIR_ABS"]) / "hmr_measurement_eval_config.json"
+          prepared.parent.mkdir(parents=True, exist_ok=True)
+          prepared.write_text(json.dumps(config, indent=2), encoding="utf-8")
+          print(json.dumps({
+              "prepared_config": str(prepared),
+              "transition_model": config["transition_model"],
+              "filter_backend": config["filter_backend"],
+              "num_particles": config["num_particles"],
+              "frame_rate": config["frame_rate"],
+              "num_joints": config["num_joints"],
+              "allow_missing_measurements": config["allow_missing_measurements"],
+          }, indent=2))
+          PY
+
+      - name: Run detector-measurement evaluation
+        run: |
+          set -euo pipefail
+          python scripts/run_detector_measurement_eval.py \
+            --config "$OUTPUT_DIR_ABS/hmr_measurement_eval_config.json"
+
+      - name: Validate HMR evaluation outputs
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import json
+          import os
+          from pathlib import Path
+
+          output_dir = Path(os.environ["OUTPUT_DIR_ABS"])
+          metrics_path = output_dir / "detector_filter_metrics.csv"
+          summary_path = output_dir / "detector_measurement_eval_summary.json"
+          if not metrics_path.exists():
+              raise SystemExit(f"missing metrics file: {metrics_path}")
+          if not summary_path.exists():
+              raise SystemExit(f"missing summary file: {summary_path}")
+          rows = list(csv.DictReader(metrics_path.open(newline="", encoding="utf-8")))
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          if not rows:
+              raise SystemExit("detector_filter_metrics.csv is empty")
+          if int(summary.get("row_count", 0)) <= 0:
+              raise SystemExit("summary row_count is zero")
+          validation = {
+              "row_count": len(rows),
+              "measurement_count": summary.get("measurement_count"),
+              "missing_measurement_count": len(summary.get("missing_measurements", [])),
+              "transition_model": summary.get("transition_model"),
+              "filter_backend": summary.get("filter_backend"),
+              "means": summary.get("means", {}),
+          }
+          (output_dir / "hmr_measurement_eval_validation.json").write_text(json.dumps(validation, indent=2), encoding="utf-8")
+          print(json.dumps(validation, indent=2))
+          PY
+
+      - name: Build sanitized metrics artifact
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          output_dir = Path(os.environ["OUTPUT_DIR_ABS"])
+          artifact_dir = Path(os.environ["ARTIFACT_DIR_ABS"])
+          if artifact_dir.exists():
+              shutil.rmtree(artifact_dir)
+          artifact_dir.mkdir(parents=True, exist_ok=True)
+          sensitive = [
+              os.environ["TRUTH_DATA_ROOT_ABS"],
+              os.environ["HMR_OUTPUT_ROOT_ABS"],
+              os.environ["STANDARDIZED_MEASUREMENT_DIR_ABS"],
+              os.environ["OUTPUT_DIR_ABS"],
+          ]
+
+          def scrub(value):
+              if isinstance(value, str):
+                  out = value
+                  for secret in sensitive:
+                      if secret:
+                          out = out.replace(secret, "<redacted>")
+                  return out
+              if isinstance(value, list):
+                  return [scrub(item) for item in value]
+              if isinstance(value, dict):
+                  return {key: scrub(val) for key, val in value.items()}
+              return value
+
+          for name in [
+              "detector_measurement_eval_summary.json",
+              "hmr_measurement_eval_validation.json",
+              "hmr_measurement_eval_config.json",
+              "import_hmr_measurements_summary.raw.json",
+          ]:
+              src = output_dir / name
+              if not src.exists():
+                  continue
+              try:
+                  payload = json.loads(src.read_text(encoding="utf-8"))
+                  (artifact_dir / name.replace(".raw", "")).write_text(json.dumps(scrub(payload), indent=2), encoding="utf-8")
+              except json.JSONDecodeError:
+                  (artifact_dir / name.replace(".raw", ".txt")).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+          src_csv = output_dir / "detector_filter_metrics.csv"
+          if src_csv.exists():
+              with src_csv.open(newline="", encoding="utf-8") as handle:
+                  rows = list(csv.DictReader(handle))
+              if rows:
+                  fieldnames = list(rows[0].keys())
+                  for row in rows:
+                      for key, value in list(row.items()):
+                          if "path" in key.lower():
+                              row[key] = "<redacted>"
+                          else:
+                              row[key] = scrub(value)
+                  with (artifact_dir / "detector_filter_metrics.csv").open("w", newline="", encoding="utf-8") as handle:
+                      writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                      writer.writeheader()
+                      writer.writerows(rows)
+          print(f"Sanitized artifact written to {artifact_dir}")
+          PY
+
+      - name: Upload sanitized HMR measurement artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name_prefix }}-${{ github.run_number }}-${{ github.sha }}
+          retention-days: ${{ inputs.artifact_retention_days }}
+          path: ${{ env.ARTIFACT_DIR_ABS }}
