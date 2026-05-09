@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from .particle_filter import (
     ParticleFilterResult,
-    _normalize_log_weights,
-    _normalize_log_weights_axis0,
     _particle_spread_deg,
     _prepare_confidence,
     _prepare_joint_noise,
@@ -15,40 +15,42 @@ from .particle_filter import (
     systematic_resample,
 )
 from .quaternion import quaternions_to_rotations, rotations_to_quaternions
-from .so3 import chordal_mean, geodesic_distance, left_apply_delta, left_delta
+from .so3 import geodesic_distance, left_apply_delta, left_delta
 from .transitions import TransitionModel
 
 
-def _import_pyrecest_filter():
+def _import_pyrecest_filters():
     try:
-        from pyrecest.filters import SO3ProductParticleFilter
+        from pyrecest.filters import (
+            PartitionedSO3ProductParticleFilter,
+            SO3ProductParticleFilter,
+        )
     except ImportError as exc:
         try:
+            from pyrecest.filters.partitioned_so3_product_particle_filter import (
+                PartitionedSO3ProductParticleFilter,
+            )
             from pyrecest.filters.so3_product_particle_filter import (
                 SO3ProductParticleFilter,
             )
         except ImportError:
             raise ImportError(
                 "filter_backend='pyrecest' requires PyRecEst with "
-                "pyrecest.filters.SO3ProductParticleFilter available."
+                "SO3ProductParticleFilter and PartitionedSO3ProductParticleFilter "
+                "available. Install PyRecEst main or a release containing the "
+                "SO(3)^K log-likelihood particle-filter APIs."
             ) from exc
-    return SO3ProductParticleFilter
+    return SO3ProductParticleFilter, PartitionedSO3ProductParticleFilter
+
+
+def _import_pyrecest_filter():
+    """Return the PyRecEst product filter class for backward-compatible probes."""
+    return _import_pyrecest_filters()[0]
 
 
 def _import_pyrecest_partitioned_filter():
-    try:
-        from pyrecest.filters import PartitionedSO3ProductParticleFilter
-    except ImportError as exc:
-        try:
-            from pyrecest.filters.partitioned_so3_product_particle_filter import (
-                PartitionedSO3ProductParticleFilter,
-            )
-        except ImportError:
-            raise ImportError(
-                "filter_backend='pyrecest' with particle_blocks requires PyRecEst "
-                "with pyrecest.filters.PartitionedSO3ProductParticleFilter available."
-            ) from exc
-    return PartitionedSO3ProductParticleFilter
+    """Return the PyRecEst partitioned product filter class."""
+    return _import_pyrecest_filters()[1]
 
 
 def is_pyrecest_filter_available() -> bool:
@@ -73,18 +75,6 @@ def _as_numpy(value) -> np.ndarray:
     return np.asarray(value, dtype=np.float64)
 
 
-def _resample_product_block_in_place(
-    particles: np.ndarray,
-    particle_history: list[np.ndarray],
-    block: tuple[int, ...],
-    indices: np.ndarray,
-) -> None:
-    block_indices = np.asarray(block, dtype=np.int64)
-    particles[:, block_indices] = particles[indices][:, block_indices]
-    for history_entry in particle_history:
-        history_entry[:, block_indices] = history_entry[indices][:, block_indices]
-
-
 def _component_geodesic_log_likelihood(
     filter_state,
     observation: np.ndarray,
@@ -93,12 +83,7 @@ def _component_geodesic_log_likelihood(
     noise_sigma_rad: float,
     joint_noise_sigma_rad: np.ndarray,
 ) -> np.ndarray:
-    """Evaluate PyRecEst's component SO(3)^K geodesic log likelihood.
-
-    The fallback keeps the adapter usable with released PyRecEst versions while
-    the primary path exercises PyRecEst main's confidence-aware, heteroskedastic
-    component likelihood API.
-    """
+    """Evaluate PyRecEst's component SO(3)^K geodesic log likelihood."""
     if hasattr(filter_state, "component_geodesic_log_likelihood"):
         return _as_numpy(
             filter_state.component_geodesic_log_likelihood(
@@ -115,16 +100,15 @@ def _component_geodesic_log_likelihood(
     return -0.5 * confidence[None, :] * (dist / joint_noise_sigma_rad[None, :]) ** 2
 
 
-def _update_with_geodesic_log_likelihood(
+def _update_product_with_geodesic_log_likelihood(
     filter_state,
     observation: np.ndarray,
     mask: np.ndarray,
     confidence: np.ndarray,
     noise_sigma_rad: float,
     joint_noise_sigma_rad: np.ndarray,
-    log_weights: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, float]:
-    """Update PyRecEst weights using its geodesic log-likelihood API if present."""
+) -> tuple[np.ndarray, float]:
+    """Update global PyRecEst weights using log-domain PyRecEst APIs."""
     if hasattr(filter_state, "update_with_geodesic_log_likelihood"):
         ess = filter_state.update_with_geodesic_log_likelihood(
             rotations_to_quaternions(observation),
@@ -134,20 +118,112 @@ def _update_with_geodesic_log_likelihood(
             confidence=confidence,
             resample=False,
         )
-        weights = _as_numpy(filter_state.weights)
-        return weights, np.log(weights + 1e-300), float(np.asarray(ess))
+    else:
+        joint_ll = _component_geodesic_log_likelihood(
+            filter_state,
+            observation,
+            mask,
+            confidence,
+            noise_sigma_rad,
+            joint_noise_sigma_rad,
+        )
+        ess = filter_state.update_with_log_likelihood(
+            np.sum(joint_ll, axis=-1),
+            resample=False,
+        )
+    return _as_numpy(filter_state.weights), float(np.asarray(ess))
 
-    joint_ll = _component_geodesic_log_likelihood(
-        filter_state,
-        observation,
-        mask,
-        confidence,
-        noise_sigma_rad,
-        joint_noise_sigma_rad,
+
+def _update_partitioned_with_geodesic_log_likelihood(
+    filter_state,
+    observation: np.ndarray,
+    mask: np.ndarray,
+    confidence: np.ndarray,
+    noise_sigma_rad: float,
+    joint_noise_sigma_rad: np.ndarray,
+) -> np.ndarray:
+    """Update partitioned PyRecEst block weights using component log likelihoods."""
+    if hasattr(filter_state, "update_with_geodesic_log_likelihood"):
+        ess = filter_state.update_with_geodesic_log_likelihood(
+            rotations_to_quaternions(observation),
+            noise_sigma_rad,
+            component_noise_std=joint_noise_sigma_rad,
+            mask=mask.astype(np.float64),
+            confidence=confidence,
+            resample=False,
+        )
+    else:
+        joint_ll = _component_geodesic_log_likelihood(
+            filter_state,
+            observation,
+            mask,
+            confidence,
+            noise_sigma_rad,
+            joint_noise_sigma_rad,
+        )
+        ess = filter_state.update_with_component_log_likelihoods(
+            joint_ll,
+            resample=False,
+        )
+    return _as_numpy(ess).reshape(-1)
+
+
+def _resolve_pyrecest_partition(
+    num_joints: int,
+    factorized_update: bool,
+    particle_blocks,
+) -> tuple[tuple[int, ...], ...] | None:
+    """Return a PyRecEst partition or ``None`` for a global product filter."""
+    if particle_blocks is not None:
+        from .block_particle_filter import resolve_particle_blocks
+
+        return resolve_particle_blocks(num_joints, particle_blocks)
+    if factorized_update:
+        return tuple((joint_idx,) for joint_idx in range(num_joints))
+    return None
+
+
+def _resample_partitioned_filter(
+    filter_state,
+    particle_history: list[np.ndarray],
+    partition: Sequence[Sequence[int]],
+    resample_blocks: np.ndarray,
+    rng: np.random.Generator,
+) -> None:
+    """Resample selected PyRecEst partition blocks and mirror history arrays."""
+    quaternion_particles = _as_numpy(filter_state.particles).copy()
+    block_weights = _as_numpy(filter_state.block_weights).copy()
+    for block_idx, should_resample in enumerate(resample_blocks):
+        if not bool(should_resample):
+            continue
+        indices = systematic_resample(block_weights[block_idx], rng)
+        block = np.asarray(partition[block_idx], dtype=np.int64)
+        quaternion_particles[:, block] = quaternion_particles[indices][:, block]
+        for history_entry in particle_history:
+            history_entry[:, block] = history_entry[indices][:, block]
+        block_weights[block_idx] = 1.0 / quaternion_particles.shape[0]
+    filter_state.set_particles(quaternion_particles, block_weights=block_weights)
+
+
+def _resample_product_filter(
+    filter_state,
+    particle_history: list[np.ndarray],
+    weights: np.ndarray,
+    rng: np.random.Generator,
+) -> None:
+    """Resample a global PyRecEst product filter and mirror history arrays."""
+    indices = systematic_resample(weights, rng)
+    particles = _as_numpy(filter_state.particles)[indices]
+    for history_idx, history_entry in enumerate(particle_history):
+        particle_history[history_idx] = history_entry[indices]
+    filter_state.set_particles(
+        particles,
+        weights=np.full(
+            particles.shape[0],
+            1.0 / particles.shape[0],
+            dtype=np.float64,
+        ),
     )
-    weights, log_weights = _normalize_log_weights(log_weights + np.sum(joint_ll, axis=-1))
-    filter_state.set_particles(_as_numpy(filter_state.particles), weights=weights)
-    return weights, log_weights, float(np.asarray(filter_state.effective_sample_size()))
 
 
 def run_pyrecest_particle_filter(
@@ -168,52 +244,51 @@ def run_pyrecest_particle_filter(
 
     The surrounding prototype stores rotations as matrices. This adapter keeps
     transition models and metrics in that representation while using PyRecEst's
-    SO(3)^K particle filters as the particle-state backend.  Measurement
-    scoring is delegated to PyRecEst's SO(3)^K geodesic log-likelihood helpers
-    when available, including masks, confidence values, and heteroskedastic
-    per-joint noise scales.
+    ``SO3ProductParticleFilter`` or ``PartitionedSO3ProductParticleFilter`` as
+    the particle-state backend. Measurement scoring is delegated to PyRecEst's
+    SO(3)^K geodesic log-likelihood helpers, including masks, confidence values,
+    heteroskedastic per-joint noise scales, and log-domain weight updates.
     """
+    SO3ProductParticleFilter, PartitionedSO3ProductParticleFilter = _import_pyrecest_filters()
+
     observations = np.asarray(observations, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
     confidence = _prepare_confidence(mask, confidence)
     joint_noise_sigma_rad = _prepare_joint_noise(
-        noise_sigma_rad, mask, joint_noise_sigma_rad
+        noise_sigma_rad,
+        mask,
+        joint_noise_sigma_rad,
     )
     t_steps, num_joints = observations.shape[:2]
+    partition = _resolve_pyrecest_partition(
+        num_joints,
+        factorized_update,
+        particle_blocks,
+    )
+    is_partitioned = partition is not None
+
     initial_rotations = initialize_particles(
-        observations[0], confidence[0] > 0.0, num_particles, noise_sigma_rad, rng
+        observations[0],
+        confidence[0] > 0.0,
+        num_particles,
+        noise_sigma_rad,
+        rng,
     )
     initial_quaternions = rotations_to_quaternions(initial_rotations)
-
-    blocks: tuple[tuple[int, ...], ...] | None = None
-    if particle_blocks is not None:
-        from .block_particle_filter import resolve_particle_blocks
-
-        blocks = resolve_particle_blocks(num_joints, particle_blocks)
-        filter_class = _import_pyrecest_partitioned_filter()
-        filter_state = filter_class(
+    if is_partitioned:
+        filter_state = PartitionedSO3ProductParticleFilter(
             int(num_particles),
             int(num_joints),
-            partition=blocks,
+            partition=partition,
             initial_particles=initial_quaternions,
         )
     else:
-        filter_class = _import_pyrecest_filter()
-        filter_state = filter_class(
+        filter_state = SO3ProductParticleFilter(
             int(num_particles),
             int(num_joints),
             initial_particles=initial_quaternions,
         )
 
-    log_weights = np.full(num_particles, -np.log(num_particles), dtype=np.float64)
-    log_joint_weights = np.full(
-        (num_particles, num_joints), -np.log(num_particles), dtype=np.float64
-    )
-    log_block_weights = None
-    if blocks is not None:
-        log_block_weights = np.full(
-            (len(blocks), num_particles), -np.log(num_particles), dtype=np.float64
-        )
     estimates = []
     ess_values = []
     resampled_flags = []
@@ -225,7 +300,8 @@ def run_pyrecest_particle_filter(
         if t > 0:
             particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
             predicted = transition_model.sample_next_from_history(
-                particle_history or [particles], rng
+                particle_history or [particles],
+                rng,
             )
             filter_state.set_particles(rotations_to_quaternions(predicted))
 
@@ -238,105 +314,49 @@ def run_pyrecest_particle_filter(
             filter_state.set_particles(rotations_to_quaternions(corrected))
 
         particles = quaternions_to_rotations(_as_numpy(filter_state.particles))
-        joint_ll = _component_geodesic_log_likelihood(
-            filter_state,
-            observations[t],
-            mask[t],
-            confidence[t],
-            noise_sigma_rad,
-            joint_noise_sigma_rad[t],
-        )
-
-        if blocks is not None:
-            assert log_block_weights is not None
-            block_weights = np.empty((len(blocks), num_particles), dtype=np.float64)
-            for block_idx, block in enumerate(blocks):
-                block_ll = np.sum(joint_ll[:, block], axis=-1)
-                block_weights[block_idx], log_block_weights[block_idx] = _normalize_log_weights(
-                    log_block_weights[block_idx] + block_ll
-                )
-            filter_state.set_block_weights(block_weights)
-
-            estimate_array = quaternions_to_rotations(_as_numpy(filter_state.mean()))
-            estimates.append(estimate_array)
-            ess_per_block = _as_numpy(filter_state.block_effective_sample_size())
-            ess = float(np.mean(ess_per_block))
-            weights = np.mean(block_weights, axis=0)
-            weights = weights / np.sum(weights)
-            log_weights = np.log(weights + 1e-300)
-        elif factorized_update:
-            joint_weights, log_joint_weights = _normalize_log_weights_axis0(
-                log_joint_weights + joint_ll
-            )
-            estimate = []
-            for joint_idx in range(num_joints):
-                estimate.append(
-                    chordal_mean(
-                        particles[:, joint_idx : joint_idx + 1],
-                        joint_weights[:, joint_idx],
-                    )[0]
-                )
-            estimate_array = np.asarray(estimate)
-            estimates.append(estimate_array)
-            ess_per_joint = 1.0 / np.sum(joint_weights * joint_weights, axis=0)
-            ess = float(np.mean(ess_per_joint))
-            weights = np.mean(joint_weights, axis=1)
-            weights = weights / np.sum(weights)
-            log_weights = np.log(weights + 1e-300)
-            filter_state.set_particles(
-                _as_numpy(filter_state.particles), weights=weights
-            )
-        else:
-            weights, log_weights, ess = _update_with_geodesic_log_likelihood(
+        if is_partitioned:
+            ess_per_block = _update_partitioned_with_geodesic_log_likelihood(
                 filter_state,
                 observations[t],
                 mask[t],
                 confidence[t],
                 noise_sigma_rad,
                 joint_noise_sigma_rad[t],
-                log_weights,
             )
             estimate_array = quaternions_to_rotations(_as_numpy(filter_state.mean()))
-            estimates.append(estimate_array)
+            ess = float(np.mean(ess_per_block))
+        else:
+            weights, ess = _update_product_with_geodesic_log_likelihood(
+                filter_state,
+                observations[t],
+                mask[t],
+                confidence[t],
+                noise_sigma_rad,
+                joint_noise_sigma_rad[t],
+            )
+            estimate_array = quaternions_to_rotations(_as_numpy(filter_state.mean()))
 
+        estimates.append(estimate_array)
         spread_values.append(_particle_spread_deg(particles, estimate_array))
         ess_values.append(ess)
-        if blocks is not None:
+
+        if is_partitioned:
             resample_blocks = ess_per_block < resample_threshold * num_particles
-            should_resample = bool(np.any(resample_blocks))
+            resampled_flags.append(bool(np.any(resample_blocks)))
+            if t < t_steps - 1 and bool(np.any(resample_blocks)):
+                assert partition is not None
+                _resample_partitioned_filter(
+                    filter_state,
+                    particle_history,
+                    partition,
+                    resample_blocks,
+                    rng,
+                )
         else:
-            resample_blocks = None
             should_resample = ess < resample_threshold * num_particles
-        resampled_flags.append(bool(should_resample))
-        if should_resample and t < t_steps - 1:
-            if blocks is not None:
-                assert log_block_weights is not None
-                particles = _as_numpy(filter_state.particles).copy()
-                block_weights = _as_numpy(filter_state.block_weights).copy()
-                for block_idx, should_resample_block in enumerate(resample_blocks):
-                    if not bool(should_resample_block):
-                        continue
-                    idx = systematic_resample(block_weights[block_idx], rng)
-                    _resample_product_block_in_place(
-                        particles, particle_history, blocks[block_idx], idx
-                    )
-                    block_weights[block_idx] = 1.0 / num_particles
-                    log_block_weights[block_idx] = -np.log(num_particles)
-                filter_state.set_particles(particles, block_weights=block_weights)
-            else:
-                idx = systematic_resample(weights, rng)
-                particles = _as_numpy(filter_state.particles)[idx]
-                particle_history = [entry[idx] for entry in particle_history]
-                filter_state.set_particles(
-                    particles,
-                    weights=np.full(num_particles, 1.0 / num_particles, dtype=np.float64),
-                )
-                log_weights = np.full(
-                    num_particles, -np.log(num_particles), dtype=np.float64
-                )
-                log_joint_weights = np.full(
-                    (num_particles, num_joints), -np.log(num_particles), dtype=np.float64
-                )
+            resampled_flags.append(should_resample)
+            if should_resample and t < t_steps - 1:
+                _resample_product_filter(filter_state, particle_history, weights, rng)
 
         if t < t_steps - 1:
             particle_history.append(
