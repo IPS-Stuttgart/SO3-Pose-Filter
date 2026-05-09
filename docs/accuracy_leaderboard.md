@@ -1,0 +1,52 @@
+# Step 3: accuracy leaderboard
+
+Use `scripts/build_accuracy_leaderboard.py` to turn detector/HMR and full-data motion-stratified evaluation artifacts into paper-facing accuracy tables.
+
+## One-command path from a detector/HMR config
+
+This runs the detector-measurement evaluator once per transition model, then writes a ranked leaderboard:
+
+```bash
+python scripts/build_accuracy_leaderboard.py \
+  --eval-config configs/hmr_measurements.local.json \
+  --method gaussian=gaussian_rw:numpy \
+  --method cv=constant_velocity:numpy \
+  --method mlp=mlp_delta:numpy \
+  --method hist=history_mlp_delta:numpy \
+  --method gru=gru_delta:numpy \
+  --detector-dataset HMR-KIT-or-ACCAD \
+  --output-dir runs/accuracy_leaderboard
+```
+
+To include a proposed model later, add another method spec, for example:
+
+```bash
+--method proposed=learned_proposal:numpy
+```
+
+## Aggregate already-computed runs
+
+Use this when each transition model has already been evaluated into its own output directory:
+
+```bash
+python scripts/build_accuracy_leaderboard.py \
+  --detector-run gaussian=runs/hmr_gaussian_rw \
+  --detector-run cv=runs/hmr_constant_velocity \
+  --detector-run mlp=runs/hmr_mlp_delta \
+  --detector-run hist=runs/hmr_history_mlp_delta \
+  --detector-run gru=runs/hmr_gru_delta \
+  --motion-run ACCAD=runs/full_data_accad_artifact \
+  --motion-run KIT=runs/full_data_kit_artifact \
+  --output-dir runs/accuracy_leaderboard
+```
+
+## Outputs
+
+The script writes:
+
+- `accuracy_leaderboard.md` — paper-facing Markdown table.
+- `accuracy_leaderboard.tex` — `booktabs` LaTeX table for `main.tex`.
+- `accuracy_leaderboard.csv` — complete machine-readable table.
+- `accuracy_leaderboard.json` — JSON table with row count.
+
+The ranking metric is `tracking_error_deg`; lower is better. For real detector/HMR outputs, the script adds `raw_measurement` and `persistence` baseline rows from the detector evaluation summary, then one filter row per transition-model run. Positive `improvement_vs_raw_deg` and `improvement_vs_persistence_deg` mean the method improved over those baselines.
