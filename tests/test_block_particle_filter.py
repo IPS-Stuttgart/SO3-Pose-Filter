@@ -15,6 +15,7 @@ from pose_filter.block_particle_filter import (
 from pose_filter.data import load_dataset, split_sequences
 from pose_filter.measurements import make_synthetic_measurements
 from pose_filter.particle_filter import run_filter
+from pose_filter.pyrecest_filter import is_pyrecest_partitioned_filter_available
 from pose_filter.transitions import GaussianRandomWalkTransition
 
 
@@ -100,17 +101,34 @@ class BlockParticleFilterTests(unittest.TestCase):
             )
 
             self.assertEqual(result.estimates.shape, test[0].rotations.shape)
-            with self.assertRaises(ValueError):
-                run_filter(
-                    meas.observations,
-                    meas.mask,
-                    model,
-                    meas.noise_sigma_rad,
-                    num_particles=12,
-                    rng=rng,
-                    particle_blocks="smpl_body",
-                    backend="pyrecest",
-                )
+            if not is_pyrecest_partitioned_filter_available():
+                with self.assertRaises(ImportError):
+                    run_filter(
+                        meas.observations,
+                        meas.mask,
+                        model,
+                        meas.noise_sigma_rad,
+                        num_particles=12,
+                        rng=np.random.default_rng(31),
+                        particle_blocks="smpl_body",
+                        backend="pyrecest",
+                    )
+                return
+
+            pyrecest_result = run_filter(
+                meas.observations,
+                meas.mask,
+                model,
+                meas.noise_sigma_rad,
+                num_particles=12,
+                rng=np.random.default_rng(31),
+                confidence=meas.confidence,
+                particle_blocks="smpl_body",
+                backend="pyrecest",
+            )
+            self.assertEqual(pyrecest_result.estimates.shape, test[0].rotations.shape)
+            self.assertTrue(bool(np.all(np.isfinite(pyrecest_result.effective_sample_size))))
+            self.assertTrue(bool(np.all(pyrecest_result.effective_sample_size > 0.0)))
 
 
 if __name__ == "__main__":
