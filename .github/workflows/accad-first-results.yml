@@ -29,7 +29,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Restore ACCAD sample cache
+        id: accad-sample-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: data/accad_secret_sample
+          key: so3-pose-filter-accad-sample-${{ runner.os }}-files1-v1
+
       - name: Install rclone without sudo
+        if: ${{ steps.accad-sample-cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
           if ! command -v rclone >/dev/null 2>&1; then
@@ -58,6 +66,7 @@ jobs:
           python -m pip install --upgrade "git+https://github.com/FlorianPfaff/PyRecEst.git@main"
 
       - name: Download ACCAD AMASS sample
+        if: ${{ steps.accad-sample-cache.outputs.cache-hit != 'true' }}
         run: |
           python scripts/download_webdav_amass_sample.py \
             --output-dir data/accad_secret_sample \
@@ -67,6 +76,50 @@ jobs:
             --key-env ACCAD_DATA_KEY \
             --password-env ACCAD_DATA_PASSWORD \
             --source-name ACCAD_DATA_WEBDAV_URL
+
+      - name: Write ACCAD sample cache report
+        if: ${{ steps.accad-sample-cache.outputs.cache-hit == 'true' }}
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "scripts")
+          from download_amass_sample import is_amass_npz
+
+          data_dir = Path("data/accad_secret_sample")
+          files = sorted(data_dir.glob("*.npz"))
+          if not files:
+              raise SystemExit(f"ACCAD sample cache hit but no .npz files were found in {data_dir}")
+
+          records = []
+          for path in files:
+              ok, metadata = is_amass_npz(path)
+              if not ok:
+                  raise SystemExit(f"Cached ACCAD sample is not a valid AMASS .npz: {path}; metadata={metadata}")
+              records.append({"sample_path": str(path), "metadata": metadata})
+
+          report = {
+              "source": "ACCAD_DATA_WEBDAV_URL",
+              "cache_hit": True,
+              "selected_count": len(records),
+              "files": records,
+              "errors": [],
+          }
+          report_path = Path("runs/accad_first_results_download_report.json")
+          report_path.parent.mkdir(parents=True, exist_ok=True)
+          report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Save ACCAD sample cache
+        if: ${{ steps.accad-sample-cache.outputs.cache-hit != 'true' && hashFiles('data/accad_secret_sample/*.npz') != '' }}
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: data/accad_secret_sample
+          key: ${{ steps.accad-sample-cache.outputs.cache-primary-key }}
 
       - name: Build benchmark sequence chunks
         run: |

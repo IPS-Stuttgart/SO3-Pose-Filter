@@ -56,7 +56,7 @@ on:
         required: false
         default: ""
       cache_subdir:
-        description: Persistent subdirectory below the runner tool cache/temp/cache root.
+        description: Persistent subdirectory below $HOME/.cache/datasets on the self-hosted runner.
         required: true
         default: so3-pose-filter/accad-full-data
       force_redownload:
@@ -152,7 +152,7 @@ jobs:
 
           mode = os.environ["DATA_SOURCE_MODE"]
           force = os.environ.get("FORCE_REDOWNLOAD", "false").lower() == "true"
-          cache_base = Path(os.environ.get("RUNNER_TOOL_CACHE") or os.environ.get("RUNNER_TEMP") or (Path.home() / ".cache"))
+          cache_base = Path.home() / ".cache" / "datasets"
           cache_dir = (cache_base / os.environ["CACHE_SUBDIR"]).expanduser().resolve()
           marker = cache_dir / ".so3_pose_filter_dataset_ready"
 
