@@ -58,10 +58,10 @@ ACCAD_DATA_URL=https://example.invalid/path/to/accad-or-amass-archive.zip
 The dataset is cached under:
 
 ```text
-$RUNNER_TOOL_CACHE/<cache_subdir>
+$HOME/.cache/datasets/<cache_subdir>
 ```
 
-or, if `RUNNER_TOOL_CACHE` is unavailable, under `$RUNNER_TEMP/<cache_subdir>`. On a persistent self-hosted runner this avoids re-downloading the full dataset on later runs. Use `force_redownload=true` to replace the cached copy.
+On a persistent self-hosted runner this avoids re-downloading the full dataset on later runs. Use `force_redownload=true` to replace the cached copy.
 
 An absolute local path is recommended for `ACCAD_DATA_ROOT` because GitHub Actions checks out the repository into a runner work directory that can vary by machine and service configuration. A relative path is still accepted; the workflow resolves it relative to the checked-out repository directory before validating that it exists.
 

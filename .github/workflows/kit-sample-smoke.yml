@@ -29,7 +29,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Restore KIT sample cache
+        id: kit-sample-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: data/kit_secret_sample
+          key: so3-pose-filter-kit-sample-${{ runner.os }}-files1-v1
+
       - name: Install rclone without sudo
+        if: ${{ steps.kit-sample-cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
           if ! command -v rclone >/dev/null 2>&1; then
@@ -57,6 +65,7 @@ jobs:
           python -m pip install -e .
 
       - name: Download and validate KIT AMASS sample
+        if: ${{ steps.kit-sample-cache.outputs.cache-hit != 'true' }}
         run: |
           python scripts/download_webdav_amass_sample.py \
             --output-dir data/kit_secret_sample \
@@ -66,6 +75,50 @@ jobs:
             --key-env KIT_DATA_KEY \
             --password-env KIT_DATA_PASSWORD \
             --source-name KIT_WEBDAV_URL
+
+      - name: Write KIT sample cache report
+        if: ${{ steps.kit-sample-cache.outputs.cache-hit == 'true' }}
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "scripts")
+          from download_amass_sample import is_amass_npz
+
+          data_dir = Path("data/kit_secret_sample")
+          files = sorted(data_dir.glob("*.npz"))
+          if not files:
+              raise SystemExit(f"KIT sample cache hit but no .npz files were found in {data_dir}")
+
+          records = []
+          for path in files:
+              ok, metadata = is_amass_npz(path)
+              if not ok:
+                  raise SystemExit(f"Cached KIT sample is not a valid AMASS .npz: {path}; metadata={metadata}")
+              records.append({"sample_path": str(path), "metadata": metadata})
+
+          report = {
+              "source": "KIT_WEBDAV_URL",
+              "cache_hit": True,
+              "selected_count": len(records),
+              "files": records,
+              "errors": [],
+          }
+          report_path = Path("runs/kit_sample_download_report.json")
+          report_path.parent.mkdir(parents=True, exist_ok=True)
+          report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Save KIT sample cache
+        if: ${{ steps.kit-sample-cache.outputs.cache-hit != 'true' && hashFiles('data/kit_secret_sample/*.npz') != '' }}
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: data/kit_secret_sample
+          key: ${{ steps.kit-sample-cache.outputs.cache-primary-key }}
 
       - name: Build trimmed smoke subset and config
         run: |
