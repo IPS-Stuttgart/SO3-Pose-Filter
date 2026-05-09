@@ -16,7 +16,7 @@ python scripts\import_hmr_measurements.py `
   --noise-deg 8
 ```
 
-Supported input suffixes are `.npz`, `.json`, `.pkl`, `.pickle`, `.pt`, and `.pth`. Loading `.pt` / `.pth` requires the optional torch extra.
+Supported input suffixes are `.npz`, `.json`, `.pkl`, `.pickle`, `.pt`, and `.pth`. Loading `.pt` / `.pth` requires the optional torch extra. Pickle files and legacy or full-pickle PyTorch checkpoints are disabled by default because deserializing them can execute code; add `--allow-unsafe-deserialization` only for trusted local HMR outputs.
 
 The converter accepts these pose layouts:
 

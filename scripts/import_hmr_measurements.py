@@ -9,13 +9,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from pose_filter.detector_import import save_imported_measurements  # noqa: E402
-from pose_filter.hmr_measurements import find_hmr_measurement_files, load_hmr_measurements  # noqa: E402
+from pose_filter.hmr_measurements import (  # noqa: E402
+    find_hmr_measurement_files,
+    load_hmr_measurements,
+)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Convert WHAM/GVHMR/TokenHMR-style HMR outputs to standardized SO(3)^K measurement .npz bundles."
-    )
+    parser = argparse.ArgumentParser(description="Convert WHAM/GVHMR/TokenHMR-style HMR outputs to standardized SO(3)^K measurement .npz bundles.")
     parser.add_argument("--input", required=True, type=Path, help="HMR output file or directory containing .npz/.json/.pkl/.pt files.")
     parser.add_argument("--output-dir", required=True, type=Path, help="Directory for standardized measurement .npz files.")
     parser.add_argument("--dataset-subset", default="", help="Optional substring filter when --input is a directory.")
@@ -34,6 +35,11 @@ def main() -> None:
         action="store_true",
         help="Reject 21-joint HMR body-pose outputs instead of padding missing local joints as inactive identity rotations.",
     )
+    parser.add_argument(
+        "--allow-unsafe-deserialization",
+        action="store_true",
+        help="Allow trusted local .pkl/.pickle files and unsafe .pt/.pth fallback loading.",
+    )
     parser.add_argument("--max-files", type=int, default=None, help="Optional cap for quick smoke conversions.")
     args = parser.parse_args()
 
@@ -51,6 +57,7 @@ def main() -> None:
             pose_frame=args.pose_frame,
             confidence_scale=args.confidence_scale,
             pad_missing_joints=not args.no_pad_missing_joints,
+            allow_unsafe_deserialization=args.allow_unsafe_deserialization,
         ):
             target = args.output_dir / f"{measurement.name}.npz"
             save_imported_measurements(target, measurement)
