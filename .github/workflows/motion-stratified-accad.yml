@@ -122,23 +122,25 @@ jobs:
         if: ${{ (inputs.download_sample == true || inputs.download_sample == 'true') && steps.accad-sample-cache-path.outputs.local-cache-hit != 'true' && (runner.environment == 'self-hosted' || steps.accad-sample-cache.outputs.cache-hit != 'true') }}
         run: |
           set -euo pipefail
-          if ! command -v rclone >/dev/null 2>&1; then
-            mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
-            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
-              -o "$RUNNER_TEMP/rclone-download/rclone.zip"
-            python -m zipfile -e \
-              "$RUNNER_TEMP/rclone-download/rclone.zip" \
-              "$RUNNER_TEMP/rclone-download/extract"
-            RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
-            if [ -z "$RCLONE_BIN" ]; then
-              echo "Downloaded rclone archive did not contain rclone binary" >&2
-              exit 1
-            fi
-            cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
-            chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
-            echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
-            export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+          if command -v rclone >/dev/null 2>&1 && rclone version >/dev/null 2>&1; then
+            rclone version
+            exit 0
           fi
+          mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
+          curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+            -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+          python -m zipfile -e \
+            "$RUNNER_TEMP/rclone-download/rclone.zip" \
+            "$RUNNER_TEMP/rclone-download/extract"
+          RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
+          if [ -z "$RCLONE_BIN" ]; then
+            echo "Downloaded rclone archive did not contain rclone binary" >&2
+            exit 1
+          fi
+          cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
+          chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
+          echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
           rclone version
 
       - name: Install package, Torch extras, and PyRecEst main

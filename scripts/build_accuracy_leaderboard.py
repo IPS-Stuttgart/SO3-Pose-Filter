@@ -53,7 +53,6 @@ from pose_filter.detector_evaluation import (  # noqa: E402
     run_detector_measurement_eval,
 )
 
-
 LEADERBOARD_COLUMNS = [
     "rank",
     "dataset",
@@ -271,8 +270,7 @@ def _write_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         r"\midrule",
     ]
     for row in rows:
-        lines.append(
-            " & ".join(_escape_latex(row.get(key, "")) for key in keys) + r" \\")
+        lines.append(" & ".join(_escape_latex(row.get(key, "")) for key in keys) + r" \\")
     lines.extend([r"\bottomrule", r"\end{tabular}", r"\end{table*}", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -313,9 +311,7 @@ def _method_baseline_rows(
                 "raw_measurement_error_deg": raw_error,
                 "persistence_error_deg": persistence_error,
                 "improvement_vs_raw_deg": 0.0,
-                "improvement_vs_persistence_deg": persistence_error - raw_error
-                if math.isfinite(persistence_error)
-                else float("nan"),
+                "improvement_vs_persistence_deg": persistence_error - raw_error if math.isfinite(persistence_error) else float("nan"),
                 "mean_ess": float("nan"),
                 "collapse_fraction": float("nan"),
                 "row_count": row_count,
@@ -336,9 +332,7 @@ def _method_baseline_rows(
                 "reappeared_error_deg": float("nan"),
                 "raw_measurement_error_deg": raw_error,
                 "persistence_error_deg": persistence_error,
-                "improvement_vs_raw_deg": raw_error - persistence_error
-                if math.isfinite(raw_error)
-                else float("nan"),
+                "improvement_vs_raw_deg": raw_error - persistence_error if math.isfinite(raw_error) else float("nan"),
                 "improvement_vs_persistence_deg": 0.0,
                 "mean_ess": float("nan"),
                 "collapse_fraction": float("nan"),
@@ -349,9 +343,7 @@ def _method_baseline_rows(
 
 
 def _summarize_detector_rows(rows: list[dict[str, str]]) -> dict[str, float]:
-    return {
-        key: _nanmean(row.get(key, "") for row in rows) for key in DETECTOR_SUMMARY_KEYS
-    }
+    return {key: _nanmean(row.get(key, "") for row in rows) for key in DETECTOR_SUMMARY_KEYS}
 
 
 def _detector_dataset_from_summary(summary: dict[str, Any], default: str) -> str:
@@ -402,9 +394,7 @@ def load_detector_run(spec: DetectorRunSpec, default_dataset: str) -> list[dict[
     summary = _read_json(spec.path / "detector_measurement_eval_summary.json")
     metrics_rows = _read_csv(spec.path / "detector_filter_metrics.csv")
     if not summary and not metrics_rows:
-        raise FileNotFoundError(
-            f"{spec.path} does not contain detector_measurement_eval_summary.json or detector_filter_metrics.csv"
-        )
+        raise FileNotFoundError(f"{spec.path} does not contain detector_measurement_eval_summary.json or detector_filter_metrics.csv")
     means = dict(summary.get("means", {}))
     if metrics_rows:
         row_means = _summarize_detector_rows(metrics_rows)
@@ -430,9 +420,7 @@ def load_detector_run(spec: DetectorRunSpec, default_dataset: str) -> list[dict[
             raw_error=_float_or_nan(means.get("observed_error_deg")),
             persistence_error=_float_or_nan(means.get("persistence_error_deg")),
             visible_raw_error=_float_or_nan(means.get("observed_joint_error_deg")),
-            occluded_persistence_error=_float_or_nan(
-                means.get("persistence_occluded_joint_error_deg")
-            ),
+            occluded_persistence_error=_float_or_nan(means.get("persistence_occluded_joint_error_deg")),
             row_count=summary.get("row_count", ""),
         ),
         main_row,
@@ -443,15 +431,9 @@ def _coerce_motion_row(row: dict[str, str], dataset: str) -> dict[str, Any]:
     method = row.get("method", "")
     tracking = _float_or_nan(row.get("mean_tracking_error_deg"))
     raw_improvement = _float_or_nan(row.get("mean_improvement_vs_raw_deg"))
-    persistence_improvement = _float_or_nan(
-        row.get("mean_improvement_vs_persistence_deg")
-    )
+    persistence_improvement = _float_or_nan(row.get("mean_improvement_vs_persistence_deg"))
     raw = tracking + raw_improvement if math.isfinite(raw_improvement) else float("nan")
-    persistence = (
-        tracking + persistence_improvement
-        if math.isfinite(persistence_improvement)
-        else float("nan")
-    )
+    persistence = tracking + persistence_improvement if math.isfinite(persistence_improvement) else float("nan")
     source = "motion_stratified"
     motion_bin = row.get("motion_bin", "")
     if motion_bin:
@@ -482,9 +464,7 @@ def load_motion_run(spec: MotionRunSpec) -> list[dict[str, Any]]:
     fallback = spec.path / "aggregate_method_means_by_motion_bin.csv"
     rows = _read_csv(preferred) or _read_csv(fallback)
     if not rows:
-        raise FileNotFoundError(
-            f"{spec.path} does not contain aggregate_method_means_by_noise_occlusion_motion.csv or aggregate_method_means_by_motion_bin.csv"
-        )
+        raise FileNotFoundError(f"{spec.path} does not contain aggregate_method_means_by_noise_occlusion_motion.csv or aggregate_method_means_by_motion_bin.csv")
     return [_coerce_motion_row(row, spec.dataset) for row in rows]
 
 
@@ -508,9 +488,7 @@ def parse_motion_run(value: str) -> MotionRunSpec:
 
 def parse_method(value: str) -> MethodSpec:
     if "=" not in value:
-        raise argparse.ArgumentTypeError(
-            "method must be LABEL=TRANSITION[:BACKEND[:NUM_PARTICLES]]"
-        )
+        raise argparse.ArgumentTypeError("method must be LABEL=TRANSITION[:BACKEND[:NUM_PARTICLES]]")
     label, payload = value.split("=", 1)
     parts = payload.split(":")
     if not label.strip() or not parts[0].strip():
@@ -545,9 +523,7 @@ def _run_detector_methods(
         run_dir = runs_root / spec.label
         config["output_dir"] = str(run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "leaderboard_eval_config.json").write_text(
-            json.dumps(config, indent=2), encoding="utf-8"
-        )
+        (run_dir / "leaderboard_eval_config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
         run_detector_measurement_eval(config)
         run_specs.append(DetectorRunSpec(method=spec.label, path=run_dir))
     return run_specs
@@ -573,9 +549,7 @@ def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         key=lambda row: (
             str(row.get("dataset", "")),
             str(row.get("source", "")),
-            _float_or_nan(row.get("tracking_error_deg"))
-            if math.isfinite(_float_or_nan(row.get("tracking_error_deg")))
-            else float("inf"),
+            _float_or_nan(row.get("tracking_error_deg")) if math.isfinite(_float_or_nan(row.get("tracking_error_deg"))) else float("inf"),
             str(row.get("method", "")),
         ),
     )
@@ -600,10 +574,10 @@ def build_leaderboard(
     detector_dataset: str,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for spec in detector_runs:
-        rows.extend(load_detector_run(spec, default_dataset=detector_dataset))
-    for spec in motion_runs:
-        rows.extend(load_motion_run(spec))
+    for detector_spec in detector_runs:
+        rows.extend(load_detector_run(detector_spec, default_dataset=detector_dataset))
+    for motion_spec in motion_runs:
+        rows.extend(load_motion_run(motion_spec))
     if not rows:
         raise ValueError("no rows were loaded; provide --detector-run, --motion-run, or --eval-config/--method")
     return _rank_rows(rows)
@@ -623,9 +597,7 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Build paper-facing SO(3)^K pose-filter accuracy leaderboards."
-    )
+    parser = argparse.ArgumentParser(description="Build paper-facing SO(3)^K pose-filter accuracy leaderboards.")
     parser.add_argument(
         "--detector-run",
         action="append",
