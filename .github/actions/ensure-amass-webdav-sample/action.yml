@@ -1,0 +1,237 @@
+name: Ensure AMASS WebDAV sample
+description: Restore, download, validate, and cache a bounded AMASS sample from an OwnCloud/WebDAV share.
+
+inputs:
+  label:
+    description: Human-readable dataset label, such as ACCAD or KIT.
+    required: true
+  slug:
+    description: Dataset slug used in self-hosted local cache paths.
+    required: true
+  data-root:
+    description: Workspace path where downstream steps expect .npz sample files.
+    required: true
+  report-path:
+    description: JSON report path to write or refresh after cache restore/download.
+    required: true
+  manifest-path:
+    description: Text manifest path to write after validation.
+    required: true
+  max-files:
+    description: Minimum number of valid AMASS .npz files required.
+    required: true
+  cache-key:
+    description: GitHub Actions cache key for the sample directory.
+    required: true
+  cache-version:
+    description: Cache version used in the default self-hosted path.
+    required: true
+  source-name:
+    description: Sanitized data source label written to reports.
+    required: true
+  webdav-url-env:
+    description: Environment variable containing the WebDAV URL.
+    required: true
+  key-env:
+    description: Environment variable containing the WebDAV public-share user/token.
+    required: true
+  password-env:
+    description: Environment variable containing the WebDAV public-share password.
+    required: true
+  local-cache-root:
+    description: Optional persistent self-hosted cache path. Empty uses $HOME/github-runner/.cache/datasets/so3-pose-filter.
+    required: false
+    default: ""
+  force-redownload:
+    description: Replace existing local/workspace samples before downloading.
+    required: false
+    default: "false"
+
+outputs:
+  data-root:
+    description: Workspace sample directory used by downstream steps.
+    value: ${{ steps.paths.outputs.data-root }}
+  cache-hit:
+    description: true when the sample came from self-hosted local cache or GitHub Actions cache.
+    value: ${{ steps.finish.outputs.cache-hit }}
+  source:
+    description: local, github-cache, or download.
+    value: ${{ steps.finish.outputs.source }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve sample cache paths
+      id: paths
+      shell: bash
+      env:
+        INPUT_DATA_ROOT: ${{ inputs.data-root }}
+        INPUT_LOCAL_CACHE_ROOT: ${{ inputs.local-cache-root }}
+        INPUT_SLUG: ${{ inputs.slug }}
+        INPUT_MAX_FILES: ${{ inputs.max-files }}
+        INPUT_CACHE_VERSION: ${{ inputs.cache-version }}
+        INPUT_FORCE_REDOWNLOAD: ${{ inputs.force-redownload }}
+      run: |
+        set -euo pipefail
+
+        case "${INPUT_MAX_FILES}" in
+          ''|*[!0-9]*) echo "max-files must be a positive integer" >&2; exit 2 ;;
+        esac
+        if [ "${INPUT_MAX_FILES}" -lt 1 ]; then
+          echo "max-files must be at least 1" >&2
+          exit 2
+        fi
+
+        data_root="${GITHUB_WORKSPACE}/${INPUT_DATA_ROOT}"
+        local_root="${INPUT_LOCAL_CACHE_ROOT}"
+        if [ -z "${local_root}" ]; then
+          local_root="${HOME}/github-runner/.cache/datasets/so3-pose-filter/${INPUT_SLUG}-sample-files${INPUT_MAX_FILES}-${INPUT_CACHE_VERSION}"
+        fi
+
+        if [ "${INPUT_FORCE_REDOWNLOAD}" = "true" ]; then
+          rm -rf "${data_root}" "${local_root}"
+        fi
+        mkdir -p "${data_root}" "$(dirname "${local_root}")"
+        cache_root="${data_root}"
+        if [ "${{ runner.environment }}" = "self-hosted" ]; then
+          cache_root="${local_root}"
+        fi
+        mkdir -p "${cache_root}"
+        {
+          echo "data-root=${data_root}"
+          echo "local-root=${local_root}"
+          echo "cache-root=${cache_root}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore self-hosted local sample cache
+      id: local-cache
+      if: ${{ runner.environment == 'self-hosted' && inputs.force-redownload != 'true' }}
+      shell: bash
+      env:
+        LOCAL_ROOT: ${{ steps.paths.outputs.local-root }}
+        MAX_FILES: ${{ inputs.max-files }}
+      run: |
+        set -euo pipefail
+        sample_count=0
+        if [ -d "${LOCAL_ROOT}" ]; then
+          sample_count="$(find "${LOCAL_ROOT}" -maxdepth 1 -type f -name '*.npz' | wc -l | tr -d ' ')"
+        fi
+        if [ "${sample_count}" -ge "${MAX_FILES}" ]; then
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+          echo "Restored AMASS sample from self-hosted local cache: ${LOCAL_ROOT}"
+        else
+          echo "hit=false" >> "$GITHUB_OUTPUT"
+          echo "No valid self-hosted AMASS sample cache at ${LOCAL_ROOT} (${sample_count}/${MAX_FILES} files)."
+        fi
+
+    - name: Restore GitHub sample cache
+      id: github-cache
+      if: ${{ steps.local-cache.outputs.hit != 'true' && inputs.force-redownload != 'true' }}
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.paths.outputs.cache-root }}
+        key: ${{ inputs.cache-key }}
+
+    - name: Install rclone without sudo
+      if: ${{ steps.local-cache.outputs.hit != 'true' && steps.github-cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v rclone >/dev/null 2>&1 && rclone version >/dev/null 2>&1; then
+          exit 0
+        fi
+        mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
+        curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+          -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+        python -m zipfile -e \
+          "$RUNNER_TEMP/rclone-download/rclone.zip" \
+          "$RUNNER_TEMP/rclone-download/extract"
+        RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
+        if [ -z "$RCLONE_BIN" ]; then
+          echo "Downloaded rclone archive did not contain rclone binary" >&2
+          exit 1
+        fi
+        cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
+        chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
+        echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+        export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+        rclone version
+
+    - name: Download AMASS sample
+      if: ${{ steps.local-cache.outputs.hit != 'true' && steps.github-cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python scripts/download_webdav_amass_sample.py \
+          --output-dir "${{ steps.paths.outputs.cache-root }}" \
+          --report "${{ inputs.report-path }}" \
+          --max-files "${{ inputs.max-files }}" \
+          --webdav-url-env "${{ inputs.webdav-url-env }}" \
+          --key-env "${{ inputs.key-env }}" \
+          --password-env "${{ inputs.password-env }}" \
+          --source-name "${{ inputs.source-name }}"
+
+    - name: Validate AMASS sample and write manifest
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        if [ '${{ steps.local-cache.outputs.hit }}' = 'true' ]; then
+          source=local
+        elif [ '${{ steps.github-cache.outputs.cache-hit }}' = 'true' ]; then
+          source=github-cache
+        else
+          source=download
+        fi
+        python "${ACTION_PATH}/validate_samples.py" \
+          --repo-root "${GITHUB_WORKSPACE}" \
+          --data-root "${{ steps.paths.outputs.cache-root }}" \
+          --source-name "${{ inputs.source-name }}" \
+          --min-files "${{ inputs.max-files }}" \
+          --report "${{ inputs.report-path }}" \
+          --manifest "${{ inputs.manifest-path }}" \
+          --cache-source "${source}"
+
+    - name: Mirror sample into workspace
+      if: ${{ runner.environment == 'self-hosted' }}
+      shell: bash
+      env:
+        DATA_ROOT: ${{ steps.paths.outputs.data-root }}
+        CACHE_ROOT: ${{ steps.paths.outputs.cache-root }}
+      run: |
+        set -euo pipefail
+        if [ "$(realpath -m "${DATA_ROOT}")" = "$(realpath -m "${CACHE_ROOT}")" ]; then
+          exit 0
+        fi
+        rm -rf "${DATA_ROOT}"
+        mkdir -p "${DATA_ROOT}"
+        cp -a "${CACHE_ROOT}/." "${DATA_ROOT}/"
+        echo "Mirrored self-hosted AMASS sample cache into workspace: ${DATA_ROOT}"
+
+    - name: Save GitHub sample cache
+      if: ${{ runner.environment != 'self-hosted' && steps.local-cache.outputs.hit != 'true' && steps.github-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v5
+      continue-on-error: true
+      with:
+        path: ${{ steps.paths.outputs.cache-root }}
+        key: ${{ inputs.cache-key }}
+
+    - name: Finalize AMASS sample cache
+      id: finish
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ '${{ steps.local-cache.outputs.hit }}' = 'true' ]; then
+          source=local
+          hit=true
+        elif [ '${{ steps.github-cache.outputs.cache-hit }}' = 'true' ]; then
+          source=github-cache
+          hit=true
+        else
+          source=download
+          hit=false
+        fi
+        echo "source=${source}" >> "$GITHUB_OUTPUT"
+        echo "cache-hit=${hit}" >> "$GITHUB_OUTPUT"
+        echo "${{ inputs.label }} AMASS sample source: ${source}"
