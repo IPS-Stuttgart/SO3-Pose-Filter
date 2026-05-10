@@ -1,0 +1,263 @@
+name: Prepare Dataset Caches
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs_on_json:
+        description: JSON array for runs-on. Use self-hosted labels to warm a persistent runner-local dataset path.
+        required: true
+        default: '["ubuntu-latest"]'
+      sample_file_count:
+        description: Number of AMASS .npz files to cache for each sample dataset.
+        required: true
+        default: "1"
+      cache_version:
+        description: Cache version suffix. Bump this to replace an existing GitHub Actions cache key.
+        required: true
+        default: v1
+      force_redownload:
+        description: Replace the self-hosted local cache before downloading. For GitHub cache replacement, also bump cache_version.
+        required: true
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.runs_on_json || 'ubuntu-latest' }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-sample-caches:
+    name: Prepare ${{ matrix.label }} sample cache
+    runs-on: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.runs_on_json) || '["ubuntu-latest"]') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ACCAD
+            slug: accad
+            cache_prefix: so3-pose-filter-accad-sample
+            workspace_dir: data/accad_secret_sample
+            report_path: runs/accad_sample_cache_prepare_report.json
+            manifest_path: runs/accad_sample_cache_manifest.txt
+            source_name: ACCAD_DATA_WEBDAV_URL
+            webdav_url_env: ACCAD_DATA_WEBDAV_URL
+            key_env: ACCAD_DATA_KEY
+            password_env: ACCAD_DATA_PASSWORD
+          - label: KIT
+            slug: kit
+            cache_prefix: so3-pose-filter-kit-sample
+            workspace_dir: data/kit_secret_sample
+            report_path: runs/kit_sample_cache_prepare_report.json
+            manifest_path: runs/kit_sample_cache_manifest.txt
+            source_name: KIT_WEBDAV_URL
+            webdav_url_env: KIT_WEBDAV_URL
+            key_env: KIT_DATA_KEY
+            password_env: KIT_DATA_PASSWORD
+    env:
+      ACCAD_DATA_WEBDAV_URL: ${{ secrets.ACCAD_DATA_WEBDAV_URL }}
+      ACCAD_DATA_KEY: ${{ secrets.ACCAD_DATA_KEY }}
+      ACCAD_DATA_PASSWORD: ${{ secrets.ACCAD_DATA_PASSWORD }}
+      KIT_WEBDAV_URL: ${{ secrets.KIT_WEBDAV_URL }}
+      KIT_DATA_KEY: ${{ secrets.KIT_DATA_KEY }}
+      KIT_DATA_PASSWORD: ${{ secrets.KIT_DATA_PASSWORD }}
+      SAMPLE_FILE_COUNT: ${{ (github.event_name == 'workflow_dispatch' && inputs.sample_file_count) || '1' }}
+      CACHE_VERSION: ${{ (github.event_name == 'workflow_dispatch' && inputs.cache_version) || 'v1' }}
+      FORCE_REDOWNLOAD: ${{ (github.event_name == 'workflow_dispatch' && inputs.force_redownload) || false }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package for AMASS validation
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Resolve sample cache paths
+        id: paths
+        env:
+          RUNNER_ENVIRONMENT_VALUE: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          case "${SAMPLE_FILE_COUNT}" in
+            ''|*[!0-9]*) echo "sample_file_count must be a positive integer" >&2; exit 2 ;;
+          esac
+          if [ "${SAMPLE_FILE_COUNT}" -lt 1 ]; then
+            echo "sample_file_count must be at least 1" >&2
+            exit 2
+          fi
+
+          cache_key="${{ matrix.cache_prefix }}-${RUNNER_OS}-files${SAMPLE_FILE_COUNT}-${CACHE_VERSION}"
+          workspace_data_root="${GITHUB_WORKSPACE}/${{ matrix.workspace_dir }}"
+          local_data_root="${HOME}/github-runner/.cache/datasets/so3-pose-filter/${{ matrix.slug }}-sample-files${SAMPLE_FILE_COUNT}-${CACHE_VERSION}"
+
+          if [ "${RUNNER_ENVIRONMENT_VALUE}" = "self-hosted" ]; then
+            data_root="${local_data_root}"
+          else
+            data_root="${workspace_data_root}"
+          fi
+
+          if [ "${FORCE_REDOWNLOAD}" = "true" ]; then
+            rm -rf "${data_root}"
+          fi
+          mkdir -p "${data_root}"
+
+          sample_count="$(find "${data_root}" -maxdepth 1 -type f -name '*.npz' | wc -l | tr -d ' ')"
+          if [ "${RUNNER_ENVIRONMENT_VALUE}" = "self-hosted" ] && [ "${sample_count}" -ge "${SAMPLE_FILE_COUNT}" ]; then
+            local_cache_hit=true
+            echo "${{ matrix.label }} local sample cache hit at ${data_root} (${sample_count} files)."
+          else
+            local_cache_hit=false
+            echo "${{ matrix.label }} local sample cache miss at ${data_root} (${sample_count} files)."
+          fi
+
+          {
+            echo "data-root=${data_root}"
+            echo "local-data-root=${local_data_root}"
+            echo "workspace-data-root=${workspace_data_root}"
+            echo "cache-key=${cache_key}"
+            echo "local-cache-hit=${local_cache_hit}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore or lookup GitHub sample cache
+        id: sample-cache
+        if: ${{ env.FORCE_REDOWNLOAD != 'true' }}
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.paths.outputs.data-root }}
+          key: ${{ steps.paths.outputs.cache-key }}
+          lookup-only: ${{ steps.paths.outputs.local-cache-hit == 'true' }}
+
+      - name: Install rclone without sudo
+        if: ${{ steps.paths.outputs.local-cache-hit != 'true' && steps.sample-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          if ! command -v rclone >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
+            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+              -o "$RUNNER_TEMP/rclone-download/rclone.zip"
+            python -m zipfile -e \
+              "$RUNNER_TEMP/rclone-download/rclone.zip" \
+              "$RUNNER_TEMP/rclone-download/extract"
+            RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
+            if [ -z "$RCLONE_BIN" ]; then
+              echo "Downloaded rclone archive did not contain rclone binary" >&2
+              exit 1
+            fi
+            cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
+            chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
+            echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
+            export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
+          fi
+          rclone version
+
+      - name: Download and validate ${{ matrix.label }} AMASS sample
+        if: ${{ steps.paths.outputs.local-cache-hit != 'true' && steps.sample-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          python scripts/download_webdav_amass_sample.py \
+            --output-dir "${{ steps.paths.outputs.data-root }}" \
+            --report "${{ matrix.report_path }}" \
+            --max-files "${SAMPLE_FILE_COUNT}" \
+            --webdav-url-env "${{ matrix.webdav_url_env }}" \
+            --key-env "${{ matrix.key_env }}" \
+            --password-env "${{ matrix.password_env }}" \
+            --source-name "${{ matrix.source_name }}"
+
+      - name: Write cache-hit report
+        if: ${{ steps.paths.outputs.local-cache-hit == 'true' || steps.sample-cache.outputs.cache-hit == 'true' }}
+        env:
+          DATA_ROOT: ${{ steps.paths.outputs.data-root }}
+          REPORT_PATH: ${{ matrix.report_path }}
+          SOURCE_NAME: ${{ matrix.source_name }}
+          CACHE_SOURCE: ${{ steps.paths.outputs.local-cache-hit == 'true' && 'self-hosted-local-cache' || 'github-actions-cache' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "scripts")
+          from download_amass_sample import is_amass_npz
+
+          data_dir = Path(os.environ["DATA_ROOT"])
+          files = sorted(data_dir.glob("*.npz"))
+          if not files:
+              raise SystemExit(f"Cache hit but no .npz files were found in {data_dir}")
+
+          records = []
+          for path in files:
+              ok, metadata = is_amass_npz(path)
+              if not ok:
+                  raise SystemExit(f"Cached sample is not a valid AMASS .npz: {path}; metadata={metadata}")
+              records.append({"sample_path": str(path), "metadata": metadata})
+
+          report = {
+              "source": os.environ["SOURCE_NAME"],
+              "cache_hit": True,
+              "cache_source": os.environ["CACHE_SOURCE"],
+              "selected_count": len(records),
+              "files": records,
+              "errors": [],
+          }
+          report_path = Path(os.environ["REPORT_PATH"])
+          report_path.parent.mkdir(parents=True, exist_ok=True)
+          report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Write sample manifest
+        id: samples
+        env:
+          DATA_ROOT: ${{ steps.paths.outputs.data-root }}
+          MANIFEST_PATH: ${{ matrix.manifest_path }}
+        run: |
+          set -euo pipefail
+          sample_count="$(find "${DATA_ROOT}" -maxdepth 1 -type f -name '*.npz' | wc -l | tr -d ' ')"
+          if [ "${sample_count}" -lt "${SAMPLE_FILE_COUNT}" ]; then
+            echo "Expected at least ${SAMPLE_FILE_COUNT} samples in ${DATA_ROOT}, found ${sample_count}" >&2
+            exit 1
+          fi
+          mkdir -p "$(dirname "${MANIFEST_PATH}")"
+          {
+            echo "dataset=${{ matrix.label }}"
+            echo "cache_key=${{ steps.paths.outputs.cache-key }}"
+            echo "data_root=${DATA_ROOT}"
+            echo "created_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            find "${DATA_ROOT}" -maxdepth 1 -type f -name '*.npz' -printf '%s %p\n' | sort
+          } > "${MANIFEST_PATH}"
+          cat "${MANIFEST_PATH}"
+          echo "has-samples=true" >> "$GITHUB_OUTPUT"
+
+      - name: Save GitHub sample cache
+        if: ${{ steps.sample-cache.outputs.cache-hit != 'true' && steps.samples.outputs.has-samples == 'true' }}
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: ${{ steps.paths.outputs.data-root }}
+          key: ${{ steps.paths.outputs.cache-key }}
+
+      - name: Upload cache preparation report
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.slug }}-sample-cache-prepare
+          path: |
+            ${{ matrix.report_path }}
+            ${{ matrix.manifest_path }}
