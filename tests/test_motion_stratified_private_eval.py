@@ -6,7 +6,9 @@ from pathlib import Path
 
 import numpy as np
 from _path import SRC  # noqa: F401
-from run_motion_stratified_private_accad_eval import run_motion_stratified_private_accad_eval
+from run_motion_stratified_private_accad_eval import (
+    run_motion_stratified_private_accad_eval,
+)
 
 
 def _write_scaled_motion(path: Path, scale: float, frames: int = 90, fps: float = 60.0) -> None:
@@ -81,46 +83,65 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
             self.assertTrue(summary["robustness_summary_by_motion_bin"])
             self.assertTrue(summary["particle_collapse_summary_by_motion_bin"])
             self.assertTrue(summary["transition_tracking_diagnostics_by_motion_bin"])
-            self.assertTrue(
-                (output_dir / "aggregate_benchmark_metrics_by_motion_bin.csv").exists()
-            )
-            self.assertTrue(
-                (output_dir / "aggregate_transition_metrics_by_motion_bin.csv").exists()
-            )
-            self.assertTrue(
-                (output_dir / "aggregate_transition_means_by_motion_bin.csv").exists()
-            )
-            self.assertTrue(
-                (output_dir / "aggregate_method_means_by_motion_bin.csv").exists()
-            )
-            self.assertTrue(
-                (
-                    output_dir
-                    / "aggregate_method_means_by_noise_occlusion_motion.csv"
-                ).exists()
-            )
-            self.assertTrue(
-                (output_dir / "robustness_summary_by_motion_bin.csv").exists()
-            )
-            self.assertTrue(
-                (output_dir / "particle_collapse_summary_by_motion_bin.csv").exists()
-            )
-            self.assertTrue(
-                (
-                    output_dir
-                    / "transition_tracking_diagnostics_by_motion_bin.csv"
-                ).exists()
-            )
-            self.assertTrue(
-                (
-                    output_dir
-                    / "motion_stratified_private_accad_eval_summary.md"
-                ).exists()
-            )
-            markdown = (
-                output_dir / "motion_stratified_private_accad_eval_summary.md"
-            ).read_text(encoding="utf-8")
+            self.assertTrue((output_dir / "aggregate_benchmark_metrics_by_motion_bin.csv").exists())
+            self.assertTrue((output_dir / "aggregate_transition_metrics_by_motion_bin.csv").exists())
+            self.assertTrue((output_dir / "aggregate_transition_means_by_motion_bin.csv").exists())
+            self.assertTrue((output_dir / "aggregate_method_means_by_motion_bin.csv").exists())
+            self.assertTrue((output_dir / "aggregate_method_means_by_noise_occlusion_motion.csv").exists())
+            self.assertTrue((output_dir / "robustness_summary_by_motion_bin.csv").exists())
+            self.assertTrue((output_dir / "particle_collapse_summary_by_motion_bin.csv").exists())
+            self.assertTrue((output_dir / "transition_tracking_diagnostics_by_motion_bin.csv").exists())
+            self.assertTrue((output_dir / "motion_stratified_private_accad_eval_summary.md").exists())
+            markdown = (output_dir / "motion_stratified_private_accad_eval_summary.md").read_text(encoding="utf-8")
             self.assertIn("Motion-Stratified Private ToyAMASS Evaluation", markdown)
+
+    def test_motion_stratified_private_eval_skips_unusable_bins(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw_dir = root / "raw"
+            raw_dir.mkdir()
+            _write_scaled_motion(raw_dir / "low.npz", scale=0.002, frames=90)
+            _write_scaled_motion(raw_dir / "high_short.npz", scale=0.2, frames=9)
+
+            output_dir = root / "motion_stratified_eval"
+            summary = run_motion_stratified_private_accad_eval(
+                {
+                    "dataset_name": "ToyAMASS",
+                    "source_data_root": str(raw_dir),
+                    "output_dir": str(output_dir),
+                    "frame_rate": 20,
+                    "num_joints": 23,
+                    "segment_frames": 12,
+                    "stride_frames": 6,
+                    "max_segments": 3,
+                    "selection": "balanced-motion",
+                    "max_per_file": 1,
+                    "noise_deg": 5.0,
+                    "occlusion_prob": 0.0,
+                    "num_particles": 8,
+                    "benchmark_num_particles": [8],
+                    "benchmark_seeds": [3],
+                    "benchmark_methods": ["raw", "persistence"],
+                    "benchmark_noise_deg": [5.0],
+                    "benchmark_occlusion_prob": [0.0],
+                    "transition_model": "gaussian_rw",
+                    "max_sequences": 3,
+                    "min_frames": 8,
+                    "train_fraction": 0.5,
+                    "val_fraction": 0.25,
+                    "rollout_horizon": 5,
+                    "process_noise_deg": 3.0,
+                    "noisy_persistence_process_noise_deg": 2.0,
+                    "proposal_gain": 0.2,
+                    "collapse_ablation_proposal_gain": 0.0,
+                    "factorized_update": True,
+                    "resample_threshold": 0.5,
+                }
+            )
+
+            skipped_bins = {row["motion_bin"] for row in summary["skipped_motion_bins"]}
+            self.assertIn("high_motion", skipped_bins)
+            self.assertTrue(summary["runs"])
 
 
 if __name__ == "__main__":

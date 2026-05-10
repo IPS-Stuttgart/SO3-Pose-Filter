@@ -13,9 +13,11 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from pose_filter.evaluation import write_csv, write_json  # noqa: E402
 from prepare_amass_windows import prepare_windows  # noqa: E402
 from run_first_results_benchmark import run_first_results_benchmark  # noqa: E402
+
+from pose_filter.data import load_dataset  # noqa: E402
+from pose_filter.evaluation import write_csv, write_json  # noqa: E402
 
 DEFAULT_METHODS = (
     "raw",
@@ -153,15 +155,11 @@ def _aggregate_method_means(
     groups = sorted({tuple(str(row[key]) for key in group_keys) for row in rows})
     out = []
     for group in groups:
-        group_rows = [
-            row for row in rows if tuple(str(row[key]) for key in group_keys) == group
-        ]
+        group_rows = [row for row in rows if tuple(str(row[key]) for key in group_keys) == group]
         record: dict[str, Any] = dict(zip(group_keys, group, strict=True))
         tracking = [float(row["tracking_error_deg"]) for row in group_rows]
         raw_improvement = [float(row["improvement_vs_raw_deg"]) for row in group_rows]
-        persistence_improvement = [
-            float(row["improvement_vs_persistence_deg"]) for row in group_rows
-        ]
+        persistence_improvement = [float(row["improvement_vs_persistence_deg"]) for row in group_rows]
         record.update(
             {
                 "mean_tracking_error_deg": _mean(tracking),
@@ -170,15 +168,9 @@ def _aggregate_method_means(
                 "mean_improvement_vs_raw_deg": _mean(raw_improvement),
                 "std_improvement_vs_raw_deg": _std(raw_improvement),
                 "sem_improvement_vs_raw_deg": _sem(raw_improvement),
-                "mean_improvement_vs_persistence_deg": _mean(
-                    persistence_improvement
-                ),
-                "std_improvement_vs_persistence_deg": _std(
-                    persistence_improvement
-                ),
-                "sem_improvement_vs_persistence_deg": _sem(
-                    persistence_improvement
-                ),
+                "mean_improvement_vs_persistence_deg": _mean(persistence_improvement),
+                "std_improvement_vs_persistence_deg": _std(persistence_improvement),
+                "sem_improvement_vs_persistence_deg": _sem(persistence_improvement),
                 "row_count": len(group_rows),
             }
         )
@@ -187,21 +179,10 @@ def _aggregate_method_means(
 
 
 def _aggregate_transition_means(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups = sorted(
-        {
-            (str(row["motion_bin"]), str(row["model"]), str(row["metric"]))
-            for row in rows
-        }
-    )
+    groups = sorted({(str(row["motion_bin"]), str(row["model"]), str(row["metric"])) for row in rows})
     out = []
     for motion_bin, model, metric in groups:
-        values = [
-            float(row["value"])
-            for row in rows
-            if str(row["motion_bin"]) == motion_bin
-            and str(row["model"]) == model
-            and str(row["metric"]) == metric
-        ]
+        values = [float(row["value"]) for row in rows if str(row["motion_bin"]) == motion_bin and str(row["model"]) == model and str(row["metric"]) == metric]
         out.append(
             {
                 "motion_bin": motion_bin,
@@ -220,26 +201,16 @@ def _robustness_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups = sorted({(str(row["motion_bin"]), str(row["method"])) for row in rows})
     out = []
     for motion_bin, method in groups:
-        values = [
-            float(row["mean_tracking_error_deg"])
-            for row in rows
-            if str(row["motion_bin"]) == motion_bin and str(row["method"]) == method
-        ]
+        values = [float(row["mean_tracking_error_deg"]) for row in rows if str(row["motion_bin"]) == motion_bin and str(row["method"]) == method]
         finite = np.asarray(values, dtype=np.float64)
         finite = finite[np.isfinite(finite)]
         out.append(
             {
                 "motion_bin": motion_bin,
                 "method": method,
-                "best_tracking_error_deg": float(np.min(finite))
-                if finite.size
-                else float("nan"),
-                "median_tracking_error_deg": float(np.median(finite))
-                if finite.size
-                else float("nan"),
-                "worst_tracking_error_deg": float(np.max(finite))
-                if finite.size
-                else float("nan"),
+                "best_tracking_error_deg": float(np.min(finite)) if finite.size else float("nan"),
+                "median_tracking_error_deg": float(np.median(finite)) if finite.size else float("nan"),
+                "worst_tracking_error_deg": float(np.max(finite)) if finite.size else float("nan"),
                 "mean_tracking_error_deg": _mean(values),
                 "grid_point_count": len(values),
             }
@@ -251,13 +222,7 @@ def _particle_collapse_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any
     groups = sorted({(str(row["motion_bin"]), str(row["method"])) for row in rows})
     out = []
     for motion_bin, method in groups:
-        method_rows = [
-            row
-            for row in rows
-            if str(row["motion_bin"]) == motion_bin
-            and str(row["method"]) == method
-            and str(row.get("filter_backend", "none")) != "none"
-        ]
+        method_rows = [row for row in rows if str(row["motion_bin"]) == motion_bin and str(row["method"]) == method and str(row.get("filter_backend", "none")) != "none"]
         if not method_rows:
             continue
         out.append(
@@ -267,36 +232,14 @@ def _particle_collapse_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any
                 "mean_ess": _mean([float(row["mean_ess"]) for row in method_rows]),
                 "min_ess": _mean([float(row["min_ess"]) for row in method_rows]),
                 "final_ess": _mean([float(row["final_ess"]) for row in method_rows]),
-                "resample_fraction": _mean(
-                    [float(row["resample_fraction"]) for row in method_rows]
-                ),
-                "mean_particle_spread_deg": _mean(
-                    [float(row["mean_particle_spread_deg"]) for row in method_rows]
-                ),
-                "min_particle_spread_deg": _mean(
-                    [float(row["min_particle_spread_deg"]) for row in method_rows]
-                ),
-                "final_particle_spread_deg": _mean(
-                    [float(row["final_particle_spread_deg"]) for row in method_rows]
-                ),
-                "collapse_fraction": _mean(
-                    [float(row["collapse_fraction"]) for row in method_rows]
-                ),
-                "filter_reappeared_joint_error_deg": _mean(
-                    [
-                        float(row["filter_reappeared_joint_error_deg"])
-                        for row in method_rows
-                    ]
-                ),
-                "persistence_reappeared_joint_error_deg": _mean(
-                    [
-                        float(row["persistence_reappeared_joint_error_deg"])
-                        for row in method_rows
-                    ]
-                ),
-                "reappeared_joint_count": _mean(
-                    [float(row["reappeared_joint_count"]) for row in method_rows]
-                ),
+                "resample_fraction": _mean([float(row["resample_fraction"]) for row in method_rows]),
+                "mean_particle_spread_deg": _mean([float(row["mean_particle_spread_deg"]) for row in method_rows]),
+                "min_particle_spread_deg": _mean([float(row["min_particle_spread_deg"]) for row in method_rows]),
+                "final_particle_spread_deg": _mean([float(row["final_particle_spread_deg"]) for row in method_rows]),
+                "collapse_fraction": _mean([float(row["collapse_fraction"]) for row in method_rows]),
+                "filter_reappeared_joint_error_deg": _mean([float(row["filter_reappeared_joint_error_deg"]) for row in method_rows]),
+                "persistence_reappeared_joint_error_deg": _mean([float(row["persistence_reappeared_joint_error_deg"]) for row in method_rows]),
+                "reappeared_joint_count": _mean([float(row["reappeared_joint_count"]) for row in method_rows]),
                 "row_count": len(method_rows),
             }
         )
@@ -315,22 +258,15 @@ def _transition_tracking_diagnostics(
     method_means_by_motion: list[dict[str, Any]],
     transition_means: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    transition_lookup = {
-        (row["motion_bin"], row["model"], row["metric"]): row
-        for row in transition_means
-    }
+    transition_lookup = {(row["motion_bin"], row["model"], row["metric"]): row for row in transition_means}
     out = []
     for row in method_means_by_motion:
         method = str(row["method"])
         if method in {"raw", "persistence"}:
             continue
         transition_model = _transition_model_for_method(method)
-        one_step = transition_lookup.get(
-            (str(row["motion_bin"]), transition_model, "one_step_error_deg")
-        )
-        rollout = transition_lookup.get(
-            (str(row["motion_bin"]), transition_model, "rollout_error_deg")
-        )
+        one_step = transition_lookup.get((str(row["motion_bin"]), transition_model, "one_step_error_deg"))
+        rollout = transition_lookup.get((str(row["motion_bin"]), transition_model, "rollout_error_deg"))
         if one_step is None and rollout is None:
             continue
         out.append(
@@ -340,12 +276,8 @@ def _transition_tracking_diagnostics(
                 "transition_model": transition_model,
                 "mean_tracking_error_deg": row["mean_tracking_error_deg"],
                 "sem_tracking_error_deg": row["sem_tracking_error_deg"],
-                "mean_one_step_error_deg": one_step["mean_value"]
-                if one_step
-                else float("nan"),
-                "mean_rollout_error_deg": rollout["mean_value"]
-                if rollout
-                else float("nan"),
+                "mean_one_step_error_deg": one_step["mean_value"] if one_step else float("nan"),
+                "mean_rollout_error_deg": rollout["mean_value"] if rollout else float("nan"),
                 "tracking_row_count": row["row_count"],
                 "transition_row_count": max(
                     int(one_step["row_count"]) if one_step else 0,
@@ -390,6 +322,24 @@ def _benchmark_config(
     return run_config
 
 
+def _benchmarkable_sequence_count(
+    bin_data_dir: Path,
+    config: dict[str, Any],
+) -> tuple[int, str | None]:
+    try:
+        sequences = load_dataset(
+            bin_data_dir,
+            "",
+            int(config["frame_rate"]),
+            int(config["num_joints"]),
+            max_sequences=config.get("max_sequences"),
+            min_frames=int(config.get("min_frames", 2)),
+        )
+    except ValueError as exc:
+        return 0, str(exc)
+    return len(sequences), None
+
+
 def _write_markdown_summary(path: Path, summary: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     dataset_name = str(summary.get("dataset_name", "ACCAD"))
@@ -409,6 +359,20 @@ def _write_markdown_summary(path: Path, summary: dict[str, Any]) -> None:
     ]
     for bin_name, count in summary["motion_bin_counts"].items():
         lines.append(f"| {bin_name} | {count} |")
+    skipped_bins = summary.get("skipped_motion_bins", [])
+    if skipped_bins:
+        lines.extend(
+            [
+                "",
+                "## Skipped motion bins",
+                "",
+                "| motion bin | reason |",
+                "| --- | --- |",
+            ]
+        )
+        for row in skipped_bins:
+            reason = str(row["reason"]).splitlines()[0]
+            lines.append(f"| {row['motion_bin']} | {reason} |")
     lines.extend(
         [
             "",
@@ -435,14 +399,8 @@ def run_motion_stratified_private_accad_eval(
     output_dir: str | Path | None = None,
     prepare: bool = True,
 ) -> dict[str, Any]:
-    root = _as_path(
-        source_data_root
-        or config.get("source_data_root")
-        or config.get("data_root", "D:/Uni-Data/ACCAD")
-    )
-    out_dir = _as_path(
-        output_dir or config.get("output_dir", "runs/motion_stratified_private_accad_eval")
-    )
+    root = _as_path(source_data_root or config.get("source_data_root") or config.get("data_root", "D:/Uni-Data/ACCAD"))
+    out_dir = _as_path(output_dir or config.get("output_dir", "runs/motion_stratified_private_accad_eval"))
     segments_dir = _as_path(config.get("segments_dir", out_dir / "segments"))
     out_dir.mkdir(parents=True, exist_ok=True)
     dataset_name = str(config.get("dataset_name", "ACCAD"))
@@ -458,37 +416,19 @@ def run_motion_stratified_private_accad_eval(
             num_joints=int(config.get("num_joints", 23)),
             segment_frames=int(config.get("segment_frames", 80)),
             stride_frames=int(config.get("stride_frames", 40)),
-            max_files=(
-                None
-                if config.get("max_files") is None
-                else int(config["max_files"])
-            ),
+            max_files=(None if config.get("max_files") is None else int(config["max_files"])),
             max_segments=int(config.get("max_segments", 48)),
             selection=str(config.get("selection", "top-motion")),
-            min_motion_deg_per_frame=float(
-                config.get("min_motion_deg_per_frame", 0.0)
-            ),
-            max_per_file=(
-                None
-                if config.get("max_per_file") is None
-                else int(config["max_per_file"])
-            ),
+            min_motion_deg_per_frame=float(config.get("min_motion_deg_per_frame", 0.0)),
+            max_per_file=(None if config.get("max_per_file") is None else int(config["max_per_file"])),
             clean=not bool(config.get("keep_existing_segments", False)),
         )
     else:
-        window_report = json.loads(
-            (out_dir / "window_selection_report.json").read_text(encoding="utf-8")
-        )
+        window_report = json.loads((out_dir / "window_selection_report.json").read_text(encoding="utf-8"))
 
     grouped_windows = _group_windows_by_motion_bin(window_report)
-    bin_data_dirs = {
-        bin_name: _copy_motion_bin_segments(windows, bin_name, out_dir)
-        for bin_name, windows in grouped_windows.items()
-    }
-    methods = tuple(
-        str(method)
-        for method in config.get("benchmark_methods", list(DEFAULT_METHODS))
-    )
+    bin_data_dirs = {bin_name: _copy_motion_bin_segments(windows, bin_name, out_dir) for bin_name, windows in grouped_windows.items()}
+    methods = tuple(str(method) for method in config.get("benchmark_methods", list(DEFAULT_METHODS)))
     seeds = _int_list(config.get("benchmark_seeds"), [int(config.get("seed", 19))])
     particle_counts = _int_list(
         config.get("benchmark_num_particles"),
@@ -504,9 +444,20 @@ def run_motion_stratified_private_accad_eval(
     )
 
     runs = []
+    skipped_motion_bins: list[dict[str, Any]] = []
     all_metric_rows: list[dict[str, Any]] = []
     all_transition_rows: list[dict[str, Any]] = []
     for bin_name, bin_data_dir in bin_data_dirs.items():
+        sequence_count, skip_reason = _benchmarkable_sequence_count(bin_data_dir, config)
+        if sequence_count == 0:
+            skipped_motion_bins.append(
+                {
+                    "motion_bin": bin_name,
+                    "data_root": str(bin_data_dir),
+                    "reason": skip_reason or "no benchmark-loadable sequences found",
+                }
+            )
+            continue
         for seed in seeds:
             for num_particles in particle_counts:
                 run_name = f"{bin_name}_seed_{seed}_particles_{num_particles}"
@@ -531,15 +482,16 @@ def run_motion_stratified_private_accad_eval(
                     "num_particles": num_particles,
                     "output_dir": str(run_dir),
                     "best_method": benchmark_summary["best_method"],
-                    "best_tracking_error_deg": benchmark_summary[
-                        "best_tracking_error_deg"
-                    ],
+                    "best_tracking_error_deg": benchmark_summary["best_tracking_error_deg"],
                 }
                 runs.append(run)
                 for row in _read_csv(run_dir / "benchmark_metrics.csv"):
                     all_metric_rows.append(_copy_row_with_run(row, run, bin_name))
                 for row in _read_csv(run_dir / "transition_metrics.csv"):
                     all_transition_rows.append(_copy_row_with_run(row, run, bin_name))
+    if not runs:
+        skipped = ", ".join(row["motion_bin"] for row in skipped_motion_bins)
+        raise ValueError(f"no benchmark-loadable motion bins found; skipped: {skipped}")
 
     aggregate_metrics_path = out_dir / "aggregate_benchmark_metrics_by_motion_bin.csv"
     aggregate_transition_path = out_dir / "aggregate_transition_metrics_by_motion_bin.csv"
@@ -573,9 +525,7 @@ def run_motion_stratified_private_accad_eval(
     write_csv(particle_collapse_summary_path, particle_collapse_summary)
     write_csv(transition_tracking_diagnostics_path, transition_tracking_diagnostics)
 
-    motion_bin_counts = {
-        bin_name: len(windows) for bin_name, windows in grouped_windows.items()
-    }
+    motion_bin_counts = {bin_name: len(windows) for bin_name, windows in grouped_windows.items()}
     summary = {
         "dataset_name": dataset_name,
         "source_data_root": str(root),
@@ -586,11 +536,9 @@ def run_motion_stratified_private_accad_eval(
         "num_particles": particle_counts,
         "noise_deg": noise_grid,
         "occlusion_prob": occlusion_grid,
-        "motion_bins": [
-            {"name": name, "min_deg_per_frame": lower, "max_deg_per_frame": upper}
-            for name, lower, upper in MOTION_BINS
-        ],
+        "motion_bins": [{"name": name, "min_deg_per_frame": lower, "max_deg_per_frame": upper} for name, lower, upper in MOTION_BINS],
         "motion_bin_counts": motion_bin_counts,
+        "skipped_motion_bins": skipped_motion_bins,
         "window_report": window_report,
         "runs": runs,
         "method_means_by_motion_bin": method_means_by_motion,
@@ -620,9 +568,7 @@ def run_motion_stratified_private_accad_eval(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run motion-stratified private AMASS evaluation into ignored local output folders."
-    )
+    parser = argparse.ArgumentParser(description="Run motion-stratified private AMASS evaluation into ignored local output folders.")
     parser.add_argument("--config", required=True, help="Path to JSON config.")
     parser.add_argument("--data-root", default=None, help="Override source AMASS root from config.")
     parser.add_argument("--output", default=None, help="Override output directory from config.")
