@@ -29,6 +29,7 @@ SENSITIVE_KEYS = {
 PUBLIC_FILENAMES = {
     "run_manifest.json",
     "motion_stratified_validation.json",
+    "motion_bin_segment_diagnostics.json",
     "motion_stratified_private_accad_eval_summary.json",
     "motion_stratified_private_accad_eval_summary.md",
     "aggregate_benchmark_metrics_by_motion_bin.csv",

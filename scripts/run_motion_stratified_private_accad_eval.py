@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from pose_filter.data import load_amass_sequence  # noqa: E402
 from pose_filter.evaluation import write_csv, write_json  # noqa: E402
 from prepare_amass_windows import prepare_windows  # noqa: E402
 from run_first_results_benchmark import run_first_results_benchmark  # noqa: E402
@@ -112,6 +114,24 @@ def _group_windows_by_motion_bin(window_report: dict[str, Any]) -> dict[str, lis
     return {key: value for key, value in grouped.items() if value}
 
 
+def _safe_name_component(value: str, limit: int = 96) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_.-")
+    return safe[:limit].strip("_.-") or "segment"
+
+
+def _source_slug(row: dict[str, Any], fallback: Path) -> str:
+    source_path = Path(str(row.get("source_path") or fallback))
+    informative_parts = source_path.parts[-3:]
+    if len(informative_parts) >= 2:
+        stem = "_".join(
+            Path(part).stem if idx == len(informative_parts) - 1 else part
+            for idx, part in enumerate(informative_parts)
+        )
+    else:
+        stem = fallback.stem
+    return _safe_name_component(stem)
+
+
 def _copy_motion_bin_segments(
     windows: list[dict[str, Any]],
     bin_name: str,
@@ -123,9 +143,103 @@ def _copy_motion_bin_segments(
     bin_dir.mkdir(parents=True, exist_ok=True)
     for idx, row in enumerate(windows):
         source = Path(str(row["output_path"]))
-        target = bin_dir / f"segment_{idx:03d}_{source.name}"
+        target = bin_dir / f"segment_{idx:03d}_{_source_slug(row, source)}.npz"
         shutil.copy2(source, target)
     return bin_dir
+
+
+def _segment_diagnostics(
+    bin_name: str,
+    bin_dir: Path,
+    windows: list[dict[str, Any]],
+    *,
+    frame_rate: int,
+    num_joints: int,
+    min_frames: int,
+    max_examples: int = 5,
+) -> dict[str, Any]:
+    files = sorted(bin_dir.rglob("*.npz"))
+    usable = 0
+    rejection_examples = []
+    for path in files:
+        try:
+            seq = load_amass_sequence(path, frame_rate=frame_rate, num_joints=num_joints)
+            frames = int(seq.rotations.shape[0])
+            if frames < int(min_frames):
+                if len(rejection_examples) < max_examples:
+                    rejection_examples.append(
+                        {
+                            "file": str(path.relative_to(bin_dir)),
+                            "reason": f"{frames} frames after downsampling, need at least {int(min_frames)}",
+                        }
+                    )
+                continue
+            usable += 1
+        except Exception as exc:
+            if len(rejection_examples) < max_examples:
+                rejection_examples.append(
+                    {"file": str(path.relative_to(bin_dir)), "reason": str(exc)}
+                )
+    source_examples = []
+    for row in windows[:max_examples]:
+        source = Path(str(row.get("source_path") or row.get("output_path", "")))
+        source_examples.append("/".join(source.parts[-3:]))
+    return {
+        "motion_bin": bin_name,
+        "selected_window_count": len(windows),
+        "segment_dir": str(bin_dir),
+        "npz_count": len(files),
+        "usable_count": usable,
+        "min_frames": int(min_frames),
+        "frame_rate": int(frame_rate),
+        "num_joints": int(num_joints),
+        "source_examples": source_examples,
+        "rejection_examples": rejection_examples,
+    }
+
+
+def _validate_motion_bin_segments(
+    grouped_windows: dict[str, list[dict[str, Any]]],
+    bin_data_dirs: dict[str, Path],
+    diagnostics_path: Path,
+    *,
+    frame_rate: int,
+    num_joints: int,
+    min_frames: int,
+) -> dict[str, Any]:
+    diagnostics = {
+        bin_name: _segment_diagnostics(
+            bin_name,
+            bin_data_dirs[bin_name],
+            windows,
+            frame_rate=frame_rate,
+            num_joints=num_joints,
+            min_frames=min_frames,
+        )
+        for bin_name, windows in grouped_windows.items()
+    }
+    write_json(diagnostics_path, diagnostics)
+    bad_bins = {
+        bin_name: details
+        for bin_name, details in diagnostics.items()
+        if int(details["usable_count"]) <= 0
+    }
+    if bad_bins:
+        compact = {
+            bin_name: {
+                "selected_window_count": details["selected_window_count"],
+                "npz_count": details["npz_count"],
+                "usable_count": details["usable_count"],
+                "source_examples": details["source_examples"],
+                "rejection_examples": details["rejection_examples"],
+            }
+            for bin_name, details in bad_bins.items()
+        }
+        raise ValueError(
+            "one or more motion bins contain no usable AMASS segment files after materialization; "
+            f"see {diagnostics_path}\n{json.dumps(compact, indent=2)}"
+        )
+    return diagnostics
 
 
 def _copy_row_with_run(
@@ -485,6 +599,15 @@ def run_motion_stratified_private_accad_eval(
         bin_name: _copy_motion_bin_segments(windows, bin_name, out_dir)
         for bin_name, windows in grouped_windows.items()
     }
+    segment_diagnostics_path = out_dir / "motion_bin_segment_diagnostics.json"
+    segment_diagnostics = _validate_motion_bin_segments(
+        grouped_windows,
+        bin_data_dirs,
+        segment_diagnostics_path,
+        frame_rate=int(config.get("frame_rate", 20)),
+        num_joints=int(config.get("num_joints", 23)),
+        min_frames=int(config.get("min_frames", 2)),
+    )
     methods = tuple(
         str(method)
         for method in config.get("benchmark_methods", list(DEFAULT_METHODS))
@@ -591,6 +714,7 @@ def run_motion_stratified_private_accad_eval(
             for name, lower, upper in MOTION_BINS
         ],
         "motion_bin_counts": motion_bin_counts,
+        "motion_bin_segment_diagnostics": segment_diagnostics,
         "window_report": window_report,
         "runs": runs,
         "method_means_by_motion_bin": method_means_by_motion,
@@ -608,6 +732,7 @@ def run_motion_stratified_private_accad_eval(
             "robustness_summary_by_motion_bin": str(robustness_summary_path),
             "particle_collapse_summary_by_motion_bin": str(particle_collapse_summary_path),
             "transition_tracking_diagnostics_by_motion_bin": str(transition_tracking_diagnostics_path),
+            "motion_bin_segment_diagnostics": str(segment_diagnostics_path),
             "markdown_summary": str(out_dir / "motion_stratified_private_accad_eval_summary.md"),
         },
     }

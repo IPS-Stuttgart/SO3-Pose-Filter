@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -121,6 +122,44 @@ class MotionStratifiedPrivateEvalTests(unittest.TestCase):
                 output_dir / "motion_stratified_private_accad_eval_summary.md"
             ).read_text(encoding="utf-8")
             self.assertIn("Motion-Stratified Private ToyAMASS Evaluation", markdown)
+
+    def test_motion_bin_segment_diagnostics_fail_before_benchmark(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            raw_dir = root / "raw"
+            (raw_dir / "KIT" / "3").mkdir(parents=True)
+            _write_scaled_motion(raw_dir / "KIT" / "3" / "high_motion.npz", scale=0.2)
+
+            output_dir = root / "motion_stratified_eval"
+            with self.assertRaisesRegex(ValueError, "no usable AMASS segment files"):
+                run_motion_stratified_private_accad_eval(
+                    {
+                        "dataset_name": "ToyKIT",
+                        "source_data_root": str(raw_dir),
+                        "output_dir": str(output_dir),
+                        "frame_rate": 20,
+                        "num_joints": 23,
+                        "segment_frames": 6,
+                        "stride_frames": 6,
+                        "max_segments": 1,
+                        "selection": "top-motion",
+                        "max_per_file": 1,
+                        "min_frames": 20,
+                    }
+                )
+
+            diagnostics_path = output_dir / "motion_bin_segment_diagnostics.json"
+            self.assertTrue(diagnostics_path.exists())
+            diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostics["high_motion"]["selected_window_count"], 1)
+            self.assertEqual(diagnostics["high_motion"]["npz_count"], 1)
+            self.assertEqual(diagnostics["high_motion"]["usable_count"], 0)
+            self.assertTrue(diagnostics["high_motion"]["rejection_examples"])
+            copied = list(
+                (output_dir / "motion_bin_segments" / "high_motion").glob("*.npz")
+            )
+            self.assertEqual(len(copied), 1)
+            self.assertIn("KIT_3_high_motion", copied[0].stem)
 
 
 if __name__ == "__main__":

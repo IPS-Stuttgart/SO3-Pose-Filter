@@ -277,6 +277,7 @@ jobs:
             runs/motion_stratified_download_report.json
             ${{ inputs.output_dir }}/run_manifest.json
             ${{ inputs.output_dir }}/motion_stratified_validation.json
+            ${{ inputs.output_dir }}/motion_bin_segment_diagnostics.json
             ${{ inputs.output_dir }}/motion_stratified_private_accad_eval_summary.json
             ${{ inputs.output_dir }}/motion_stratified_private_accad_eval_summary.md
             ${{ inputs.output_dir }}/window_selection_report.json
