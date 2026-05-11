@@ -74,6 +74,8 @@ def run_experiment(config: dict) -> dict:
     smoother_config = SmootherConfig(
         ema_alpha=float(config.get("smoother_ema_alpha", 0.35)),
         chordal_window=int(config.get("smoother_chordal_window", 5)),
+        tangent_savgol_window=int(config.get("savgol_tangent_window", 7)),
+        tangent_savgol_degree=int(config.get("savgol_tangent_degree", 2)),
     )
     noise_deg = float(config["noise_deg"])
     occlusion_prob = float(config["occlusion_prob"])
@@ -109,9 +111,7 @@ def run_experiment(config: dict) -> dict:
         test,
         rollout_horizon=int(config.get("rollout_horizon", 10)),
     )
-    default_ablation_particle_counts = sorted(
-        {max(8, num_particles // 2), num_particles, max(8, num_particles * 2)}
-    )
+    default_ablation_particle_counts = sorted({max(8, num_particles // 2), num_particles, max(8, num_particles * 2)})
     filter_rows, per_joint_rows, temporal_rows = evaluate_filter_with_artifacts(
         test,
         model,
@@ -137,30 +137,10 @@ def run_experiment(config: dict) -> dict:
         base_proposal_gain=proposal_gain,
         base_factorized_update=factorized_update,
         base_resample_threshold=resample_threshold,
-        particle_counts=[
-            int(x)
-            for x in _list_config(
-                config, "ablation_particle_counts", default_ablation_particle_counts
-            )
-        ],
-        proposal_gains=[
-            float(x)
-            for x in _list_config(
-                config, "ablation_proposal_gains", [0.0, proposal_gain]
-            )
-        ],
-        factorized_updates=[
-            bool(x)
-            for x in _list_config(
-                config, "ablation_factorized_updates", [False, True]
-            )
-        ],
-        resample_thresholds=[
-            float(x)
-            for x in _list_config(
-                config, "ablation_resample_thresholds", [resample_threshold]
-            )
-        ],
+        particle_counts=[int(x) for x in _list_config(config, "ablation_particle_counts", default_ablation_particle_counts)],
+        proposal_gains=[float(x) for x in _list_config(config, "ablation_proposal_gains", [0.0, proposal_gain])],
+        factorized_updates=[bool(x) for x in _list_config(config, "ablation_factorized_updates", [False, True])],
+        resample_thresholds=[float(x) for x in _list_config(config, "ablation_resample_thresholds", [resample_threshold])],
         confidence_noise_std=confidence_noise_std,
         min_confidence=min_confidence,
         filter_backend=filter_backend,
@@ -170,10 +150,7 @@ def run_experiment(config: dict) -> dict:
         test,
         model,
         [float(x) for x in config.get("robustness_noise_deg", [config["noise_deg"]])],
-        [
-            float(x)
-            for x in config.get("robustness_occlusion_prob", [config["occlusion_prob"]])
-        ],
+        [float(x) for x in config.get("robustness_occlusion_prob", [config["occlusion_prob"]])],
         num_particles,
         seed,
         proposal_gain=proposal_gain,
@@ -243,11 +220,11 @@ def run_experiment(config: dict) -> dict:
         "smoothers": {
             "ema_alpha": smoother_config.ema_alpha,
             "chordal_window": smoother_config.chordal_window,
+            "savgol_tangent_window": smoother_config.tangent_savgol_window,
+            "savgol_tangent_degree": smoother_config.tangent_savgol_degree,
         },
         "transition_metrics": transition_rows,
-        "filter_metrics_mean": {
-            key: _mean_metric(filter_rows, key) for key in FILTER_SUMMARY_KEYS
-        },
+        "filter_metrics_mean": {key: _mean_metric(filter_rows, key) for key in FILTER_SUMMARY_KEYS},
         "ablation_metrics": ablations,
         "outputs": {
             "transition_metrics": str(output_dir / "transition_metrics.csv"),

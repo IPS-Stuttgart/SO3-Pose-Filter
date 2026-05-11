@@ -8,6 +8,10 @@ from pathlib import Path
 
 import numpy as np
 from _path import SRC  # noqa: F401
+from prepare_amass_windows import prepare_windows
+from run_first_results_benchmark import run_first_results_benchmark
+from run_private_accad_eval import load_private_eval_config, run_private_accad_eval
+
 from pose_filter.data import load_dataset, split_sequences
 from pose_filter.evaluation import (
     ablation_rows,
@@ -29,9 +33,6 @@ from pose_filter.transitions import (
     PersistenceTransition,
     is_torch_available,
 )
-from run_first_results_benchmark import run_first_results_benchmark
-from prepare_amass_windows import prepare_windows
-from run_private_accad_eval import load_private_eval_config, run_private_accad_eval
 
 
 def _write_toy(path: Path, frames: int = 45, fps: float = 60.0) -> None:
@@ -184,12 +185,8 @@ class PipelineTests(unittest.TestCase):
             )
             self.assertIn("noisy_persistence_pf", {row["method"] for row in metric_rows})
             self.assertTrue((output_dir / "first_results_summary.json").exists())
-            self.assertTrue(
-                (output_dir / "plots" / "tracking_error_heatmap.svg").exists()
-            )
-            self.assertTrue(
-                (output_dir / "plots" / "filter_vs_baselines.svg").exists()
-            )
+            self.assertTrue((output_dir / "plots" / "tracking_error_heatmap.svg").exists())
+            self.assertTrue((output_dir / "plots" / "filter_vs_baselines.svg").exists())
 
     def test_private_accad_eval_smoke_uses_ignored_output_layout(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -348,9 +345,7 @@ class PipelineTests(unittest.TestCase):
                 GaussianRandomWalkTransition.fit(train),
                 LearnedDeltaTransition.fit(train),
                 MLPDeltaTransition.fit(train, hidden_dim=12, epochs=3, seed=5),
-                HistoryMLPDeltaTransition.fit(
-                    train, history_length=2, hidden_dim=12, epochs=3, seed=6
-                ),
+                HistoryMLPDeltaTransition.fit(train, history_length=2, hidden_dim=12, epochs=3, seed=6),
             ]
             rng = np.random.default_rng(9)
             meas = make_synthetic_measurements(
@@ -398,12 +393,7 @@ class PipelineTests(unittest.TestCase):
                 factorized_updates=[False],
                 resample_thresholds=[0.25],
             )
-            self.assertTrue(
-                any(
-                    row["ablation"] == "proposal_gain" and row["value"] == "0"
-                    for row in rows
-                )
-            )
+            self.assertTrue(any(row["ablation"] == "proposal_gain" and row["value"] == "0" for row in rows))
             self.assertTrue(any(row["ablation"] == "factorized_update" for row in rows))
 
     def test_mlp_delta_checkpoint_roundtrip(self) -> None:
@@ -488,6 +478,55 @@ class PipelineTests(unittest.TestCase):
 
             self.assertIn("smoother_ema_error_deg", row)
             self.assertIn("smoother_chordal_error_deg", row)
+            self.assertIn("savgol_tangent_error_deg", row)
+
+    def test_first_results_benchmark_accepts_smoother_methods(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx in range(4):
+                _write_toy(root / f"seq_{idx}.npz", frames=60 + idx * 3)
+
+            output_dir = root / "benchmark"
+            summary = run_first_results_benchmark(
+                {
+                    "data_root": str(root),
+                    "dataset_subset": "",
+                    "frame_rate": 20,
+                    "num_joints": 23,
+                    "noise_deg": 5.0,
+                    "occlusion_prob": 0.5,
+                    "num_particles": 8,
+                    "transition_model": "gaussian_rw",
+                    "seed": 13,
+                    "max_sequences": 4,
+                    "min_frames": 10,
+                    "process_noise_deg": 3.0,
+                    "smoother_ema_alpha": 0.5,
+                    "smoother_chordal_window": 3,
+                    "savgol_tangent_window": 5,
+                    "savgol_tangent_degree": 1,
+                },
+                output_dir,
+                methods=(
+                    "raw",
+                    "persistence",
+                    "smoother_ema",
+                    "smoother_chordal",
+                    "savgol_tangent",
+                    "gaussian_rw",
+                ),
+                noise_grid=[5.0],
+                occlusion_grid=[0.5],
+            )
+
+            self.assertEqual(summary["row_count"], 6)
+            self.assertIn("savgol_tangent", summary["means_by_method"])
+            with (output_dir / "benchmark_metrics.csv").open(newline="", encoding="utf-8") as handle:
+                metric_rows = list(csv.DictReader(handle))
+            savgol = next(row for row in metric_rows if row["method"] == "savgol_tangent")
+            self.assertEqual(savgol["transition_model"], "savgol_tangent")
+            self.assertEqual(savgol["filter_backend"], "offline_smoother")
+            self.assertEqual(savgol["source_metric"], "savgol_tangent_error_deg")
 
     def test_evaluation_reports_research_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as td:

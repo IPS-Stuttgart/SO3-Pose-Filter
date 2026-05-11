@@ -40,6 +40,7 @@ FILTER_SUMMARY_KEYS = [
     "persistence_error_deg",
     "smoother_ema_error_deg",
     "smoother_chordal_error_deg",
+    "savgol_tangent_error_deg",
     "filter_observed_joint_error_deg",
     "filter_occluded_joint_error_deg",
     "persistence_observed_joint_error_deg",
@@ -162,9 +163,7 @@ def temporal_metrics(rotations: np.ndarray, truth: np.ndarray | None = None) -> 
     }
     if truth is not None:
         truth_acceleration, truth_jerk = _temporal_deltas(truth)
-        row["acceleration_error_deg"] = _mean_rotvec_error_deg(
-            acceleration, truth_acceleration
-        )
+        row["acceleration_error_deg"] = _mean_rotvec_error_deg(acceleration, truth_acceleration)
         row["jerk_error_deg"] = _mean_rotvec_error_deg(jerk, truth_jerk)
     return row
 
@@ -268,16 +267,12 @@ def evaluate_filter_sequence_artifacts(
         x = persistence.deterministic_next(x)
         persistence_estimates_list.append(x)
     persistence_estimates = np.asarray(persistence_estimates_list)
-    smoother_estimates = run_baseline_smoothers(
-        measurements.observations, measurements.mask, smoother_config
-    )
+    smoother_estimates = run_baseline_smoothers(measurements.observations, measurements.mask, smoother_config)
     reappeared_mask = _reappeared_joint_mask(measurements.mask)
     collapse_ess_threshold = 0.05 * float(num_particles)
     collapse_spread_threshold_deg = 0.25
 
-    observed_joint_error = observed_error_deg(
-        seq.rotations, measurements.observations, measurements.mask
-    )
+    observed_joint_error = observed_error_deg(seq.rotations, measurements.observations, measurements.mask)
     observed_confidence_weighted_error = observed_error_deg(
         seq.rotations,
         measurements.observations,
@@ -298,21 +293,11 @@ def evaluate_filter_sequence_artifacts(
         "observed_error_deg": observed_confidence_weighted_error,
         "observed_joint_error_deg": observed_joint_error,
         "filter_error_deg": mean_joint_distance_deg(seq.rotations, result.estimates),
-        "persistence_error_deg": mean_joint_distance_deg(
-            seq.rotations, persistence_estimates
-        ),
-        "filter_observed_joint_error_deg": _distance_mean_deg(
-            seq.rotations, result.estimates, measurements.mask
-        ),
-        "filter_occluded_joint_error_deg": _distance_mean_deg(
-            seq.rotations, result.estimates, ~measurements.mask
-        ),
-        "persistence_observed_joint_error_deg": _distance_mean_deg(
-            seq.rotations, persistence_estimates, measurements.mask
-        ),
-        "persistence_occluded_joint_error_deg": _distance_mean_deg(
-            seq.rotations, persistence_estimates, ~measurements.mask
-        ),
+        "persistence_error_deg": mean_joint_distance_deg(seq.rotations, persistence_estimates),
+        "filter_observed_joint_error_deg": _distance_mean_deg(seq.rotations, result.estimates, measurements.mask),
+        "filter_occluded_joint_error_deg": _distance_mean_deg(seq.rotations, result.estimates, ~measurements.mask),
+        "persistence_observed_joint_error_deg": _distance_mean_deg(seq.rotations, persistence_estimates, measurements.mask),
+        "persistence_occluded_joint_error_deg": _distance_mean_deg(seq.rotations, persistence_estimates, ~measurements.mask),
         "mean_ess": float(np.mean(result.effective_sample_size)),
         "min_ess": float(np.min(result.effective_sample_size)),
         "final_ess": float(result.effective_sample_size[-1]),
@@ -321,18 +306,9 @@ def evaluate_filter_sequence_artifacts(
         "mean_particle_spread_deg": float(np.mean(result.particle_spread_deg)),
         "min_particle_spread_deg": float(np.min(result.particle_spread_deg)),
         "final_particle_spread_deg": float(result.particle_spread_deg[-1]),
-        "collapse_fraction": float(
-            np.mean(
-                (result.effective_sample_size <= collapse_ess_threshold)
-                | (result.particle_spread_deg <= collapse_spread_threshold_deg)
-            )
-        ),
-        "filter_reappeared_joint_error_deg": _distance_mean_deg(
-            seq.rotations, result.estimates, reappeared_mask
-        ),
-        "persistence_reappeared_joint_error_deg": _distance_mean_deg(
-            seq.rotations, persistence_estimates, reappeared_mask
-        ),
+        "collapse_fraction": float(np.mean((result.effective_sample_size <= collapse_ess_threshold) | (result.particle_spread_deg <= collapse_spread_threshold_deg))),
+        "filter_reappeared_joint_error_deg": _distance_mean_deg(seq.rotations, result.estimates, reappeared_mask),
+        "persistence_reappeared_joint_error_deg": _distance_mean_deg(seq.rotations, persistence_estimates, reappeared_mask),
         "reappeared_joint_count": int(np.sum(reappeared_mask)),
     }
     for name, estimates in smoother_estimates.items():
@@ -487,45 +463,24 @@ def _unique_preserve_order(values: list[_T]) -> list[_T]:
 def _mean_row(rows: list[dict]) -> dict:
     return {
         "mean_confidence": float(np.nanmean([r["mean_confidence"] for r in rows])),
-        "observed_error_deg": float(
-            np.nanmean([r["observed_error_deg"] for r in rows])
-        ),
+        "observed_error_deg": float(np.nanmean([r["observed_error_deg"] for r in rows])),
         "filter_error_deg": float(np.nanmean([r["filter_error_deg"] for r in rows])),
-        "persistence_error_deg": float(
-            np.nanmean([r["persistence_error_deg"] for r in rows])
-        ),
-        "smoother_ema_error_deg": float(
-            np.nanmean([r["smoother_ema_error_deg"] for r in rows])
-        ),
-        "smoother_chordal_error_deg": float(
-            np.nanmean([r["smoother_chordal_error_deg"] for r in rows])
-        ),
+        "persistence_error_deg": float(np.nanmean([r["persistence_error_deg"] for r in rows])),
+        "smoother_ema_error_deg": float(np.nanmean([r["smoother_ema_error_deg"] for r in rows])),
+        "smoother_chordal_error_deg": float(np.nanmean([r["smoother_chordal_error_deg"] for r in rows])),
+        "savgol_tangent_error_deg": float(np.nanmean([r["savgol_tangent_error_deg"] for r in rows])),
         "mean_ess": float(np.nanmean([r["mean_ess"] for r in rows])),
         "min_ess": float(np.nanmean([r["min_ess"] for r in rows])),
         "final_ess": float(np.nanmean([r["final_ess"] for r in rows])),
-        "mean_resample_count": float(
-            np.nanmean([r["resample_count"] for r in rows])
-        ),
+        "mean_resample_count": float(np.nanmean([r["resample_count"] for r in rows])),
         "resample_fraction": float(np.nanmean([r["resample_fraction"] for r in rows])),
-        "mean_particle_spread_deg": float(
-            np.nanmean([r["mean_particle_spread_deg"] for r in rows])
-        ),
-        "min_particle_spread_deg": float(
-            np.nanmean([r["min_particle_spread_deg"] for r in rows])
-        ),
-        "final_particle_spread_deg": float(
-            np.nanmean([r["final_particle_spread_deg"] for r in rows])
-        ),
+        "mean_particle_spread_deg": float(np.nanmean([r["mean_particle_spread_deg"] for r in rows])),
+        "min_particle_spread_deg": float(np.nanmean([r["min_particle_spread_deg"] for r in rows])),
+        "final_particle_spread_deg": float(np.nanmean([r["final_particle_spread_deg"] for r in rows])),
         "collapse_fraction": float(np.nanmean([r["collapse_fraction"] for r in rows])),
-        "filter_reappeared_joint_error_deg": float(
-            np.nanmean([r["filter_reappeared_joint_error_deg"] for r in rows])
-        ),
-        "persistence_reappeared_joint_error_deg": float(
-            np.nanmean([r["persistence_reappeared_joint_error_deg"] for r in rows])
-        ),
-        "reappeared_joint_count": float(
-            np.nanmean([r["reappeared_joint_count"] for r in rows])
-        ),
+        "filter_reappeared_joint_error_deg": float(np.nanmean([r["filter_reappeared_joint_error_deg"] for r in rows])),
+        "persistence_reappeared_joint_error_deg": float(np.nanmean([r["persistence_reappeared_joint_error_deg"] for r in rows])),
+        "reappeared_joint_count": float(np.nanmean([r["reappeared_joint_count"] for r in rows])),
     }
 
 
@@ -558,24 +513,16 @@ def ablation_rows(
     )
     variants = [("baseline", "baseline", base)]
 
-    for count in _unique_preserve_order(
-        [base.num_particles, *[int(x) for x in particle_counts]]
-    ):
+    for count in _unique_preserve_order([base.num_particles, *[int(x) for x in particle_counts]]):
         cfg = base._replace(num_particles=count)
         variants.append(("num_particles", str(count), cfg))
-    for gain in _unique_preserve_order(
-        [0.0, base.proposal_gain, *[float(x) for x in proposal_gains]]
-    ):
+    for gain in _unique_preserve_order([0.0, base.proposal_gain, *[float(x) for x in proposal_gains]]):
         cfg = base._replace(proposal_gain=gain)
         variants.append(("proposal_gain", f"{gain:g}", cfg))
-    for enabled in _unique_preserve_order(
-        [False, base.factorized_update, *[bool(x) for x in factorized_updates]]
-    ):
+    for enabled in _unique_preserve_order([False, base.factorized_update, *[bool(x) for x in factorized_updates]]):
         cfg = base._replace(factorized_update=enabled)
         variants.append(("factorized_update", str(enabled).lower(), cfg))
-    for threshold in _unique_preserve_order(
-        [base.resample_threshold, *[float(x) for x in resample_thresholds]]
-    ):
+    for threshold in _unique_preserve_order([base.resample_threshold, *[float(x) for x in resample_thresholds]]):
         cfg = base._replace(resample_threshold=threshold)
         variants.append(("resample_threshold", f"{threshold:g}", cfg))
 
@@ -680,73 +627,31 @@ def robustness_rows(
                 {
                     "noise_deg": float(noise),
                     "occlusion_prob": float(occ),
-                    "mean_confidence": _nanmean(
-                        [r["mean_confidence"] for r in result_rows]
-                    ),
+                    "mean_confidence": _nanmean([r["mean_confidence"] for r in result_rows]),
                     "filter_backend": filter_backend,
-                    "observed_error_deg": _nanmean(
-                        [r["observed_error_deg"] for r in result_rows]
-                    ),
-                    "observed_joint_error_deg": _nanmean(
-                        [r["observed_joint_error_deg"] for r in result_rows]
-                    ),
-                    "filter_error_deg": _nanmean(
-                        [r["filter_error_deg"] for r in result_rows]
-                    ),
-                    "persistence_error_deg": _nanmean(
-                        [r["persistence_error_deg"] for r in result_rows]
-                    ),
-                    "smoother_ema_error_deg": _nanmean(
-                        [r["smoother_ema_error_deg"] for r in result_rows]
-                    ),
-                    "smoother_chordal_error_deg": _nanmean(
-                        [r["smoother_chordal_error_deg"] for r in result_rows]
-                    ),
-                    "filter_observed_joint_error_deg": _nanmean(
-                        [r["filter_observed_joint_error_deg"] for r in result_rows]
-                    ),
-                    "filter_occluded_joint_error_deg": _nanmean(
-                        [r["filter_occluded_joint_error_deg"] for r in result_rows]
-                    ),
-                    "filter_acceleration_error_deg": _nanmean(
-                        [r["filter_acceleration_error_deg"] for r in result_rows]
-                    ),
-                    "filter_jerk_error_deg": _nanmean(
-                        [r["filter_jerk_error_deg"] for r in result_rows]
-                    ),
+                    "observed_error_deg": _nanmean([r["observed_error_deg"] for r in result_rows]),
+                    "observed_joint_error_deg": _nanmean([r["observed_joint_error_deg"] for r in result_rows]),
+                    "filter_error_deg": _nanmean([r["filter_error_deg"] for r in result_rows]),
+                    "persistence_error_deg": _nanmean([r["persistence_error_deg"] for r in result_rows]),
+                    "smoother_ema_error_deg": _nanmean([r["smoother_ema_error_deg"] for r in result_rows]),
+                    "smoother_chordal_error_deg": _nanmean([r["smoother_chordal_error_deg"] for r in result_rows]),
+                    "savgol_tangent_error_deg": _nanmean([r["savgol_tangent_error_deg"] for r in result_rows]),
+                    "filter_observed_joint_error_deg": _nanmean([r["filter_observed_joint_error_deg"] for r in result_rows]),
+                    "filter_occluded_joint_error_deg": _nanmean([r["filter_occluded_joint_error_deg"] for r in result_rows]),
+                    "filter_acceleration_error_deg": _nanmean([r["filter_acceleration_error_deg"] for r in result_rows]),
+                    "filter_jerk_error_deg": _nanmean([r["filter_jerk_error_deg"] for r in result_rows]),
                     "mean_ess": _nanmean([r["mean_ess"] for r in result_rows]),
                     "min_ess": _nanmean([r["min_ess"] for r in result_rows]),
                     "final_ess": _nanmean([r["final_ess"] for r in result_rows]),
-                    "resample_count": _nanmean(
-                        [r["resample_count"] for r in result_rows]
-                    ),
-                    "resample_fraction": _nanmean(
-                        [r["resample_fraction"] for r in result_rows]
-                    ),
-                    "mean_particle_spread_deg": _nanmean(
-                        [r["mean_particle_spread_deg"] for r in result_rows]
-                    ),
-                    "min_particle_spread_deg": _nanmean(
-                        [r["min_particle_spread_deg"] for r in result_rows]
-                    ),
-                    "final_particle_spread_deg": _nanmean(
-                        [r["final_particle_spread_deg"] for r in result_rows]
-                    ),
-                    "collapse_fraction": _nanmean(
-                        [r["collapse_fraction"] for r in result_rows]
-                    ),
-                    "filter_reappeared_joint_error_deg": _nanmean(
-                        [r["filter_reappeared_joint_error_deg"] for r in result_rows]
-                    ),
-                    "persistence_reappeared_joint_error_deg": _nanmean(
-                        [
-                            r["persistence_reappeared_joint_error_deg"]
-                            for r in result_rows
-                        ]
-                    ),
-                    "reappeared_joint_count": _nanmean(
-                        [r["reappeared_joint_count"] for r in result_rows]
-                    ),
+                    "resample_count": _nanmean([r["resample_count"] for r in result_rows]),
+                    "resample_fraction": _nanmean([r["resample_fraction"] for r in result_rows]),
+                    "mean_particle_spread_deg": _nanmean([r["mean_particle_spread_deg"] for r in result_rows]),
+                    "min_particle_spread_deg": _nanmean([r["min_particle_spread_deg"] for r in result_rows]),
+                    "final_particle_spread_deg": _nanmean([r["final_particle_spread_deg"] for r in result_rows]),
+                    "collapse_fraction": _nanmean([r["collapse_fraction"] for r in result_rows]),
+                    "filter_reappeared_joint_error_deg": _nanmean([r["filter_reappeared_joint_error_deg"] for r in result_rows]),
+                    "persistence_reappeared_joint_error_deg": _nanmean([r["persistence_reappeared_joint_error_deg"] for r in result_rows]),
+                    "reappeared_joint_count": _nanmean([r["reappeared_joint_count"] for r in result_rows]),
                 }
             )
     return rows
@@ -789,15 +694,10 @@ def trajectory_preview_rows(
         resample_threshold=resample_threshold,
         backend=filter_backend,
     )
-    smoother_estimates = run_baseline_smoothers(
-        measurements.observations, measurements.mask, smoother_config
-    )
+    smoother_estimates = run_baseline_smoothers(measurements.observations, measurements.mask, smoother_config)
     dist_obs = geodesic_distance(seq.rotations, measurements.observations)
     dist_filter = geodesic_distance(seq.rotations, result.estimates)
-    dist_smoothers = {
-        name: geodesic_distance(seq.rotations, estimates)
-        for name, estimates in smoother_estimates.items()
-    }
+    dist_smoothers = {name: geodesic_distance(seq.rotations, estimates) for name, estimates in smoother_estimates.items()}
     rows = []
     for t in range(seq.rotations.shape[0]):
         observed = dist_obs[t][measurements.mask[t]]
@@ -806,27 +706,11 @@ def trajectory_preview_rows(
         filter_occluded = dist_filter[t][~measurements.mask[t]]
         row = {
             "frame": t,
-            "observed_error_deg": (
-                float(np.degrees(np.mean(observed)))
-                if observed.size
-                else float("nan")
-            ),
-            "mean_observed_confidence": (
-                float(np.mean(observed_confidence))
-                if observed_confidence.size
-                else float("nan")
-            ),
+            "observed_error_deg": (float(np.degrees(np.mean(observed))) if observed.size else float("nan")),
+            "mean_observed_confidence": (float(np.mean(observed_confidence)) if observed_confidence.size else float("nan")),
             "filter_error_deg": float(np.degrees(np.mean(dist_filter[t]))),
-            "filter_observed_joint_error_deg": (
-                float(np.degrees(np.mean(filter_observed)))
-                if filter_observed.size
-                else float("nan")
-            ),
-            "filter_occluded_joint_error_deg": (
-                float(np.degrees(np.mean(filter_occluded)))
-                if filter_occluded.size
-                else float("nan")
-            ),
+            "filter_observed_joint_error_deg": (float(np.degrees(np.mean(filter_observed))) if filter_observed.size else float("nan")),
+            "filter_occluded_joint_error_deg": (float(np.degrees(np.mean(filter_occluded))) if filter_occluded.size else float("nan")),
             "observed_joint_fraction": float(np.mean(measurements.mask[t])),
             "ess": float(result.effective_sample_size[t]),
         }

@@ -65,8 +65,9 @@ python scripts\run_model_sweep.py --config configs\example.json --output runs\sw
 ```
 
 Run the first-results benchmark wrapper, which reports raw observations, deterministic persistence,
-deterministic/noisy persistence particle-filter ablations, Gaussian random-walk particle filters, and the
-nonlinear current-pose/history MLP transition particle filters on one noise/occlusion grid:
+deterministic/noisy persistence particle-filter ablations, deterministic temporal smoothers, Gaussian
+random-walk particle filters, and the nonlinear current-pose/history MLP transition particle filters on one
+noise/occlusion grid:
 
 ```powershell
 python scripts\run_first_results_benchmark.py `
@@ -146,14 +147,14 @@ python scripts\run_first_results_benchmark.py `
 python scripts\run_first_results_benchmark.py `
   --config configs\accad_dynamic_benchmark.example.json `
   --output runs\accad_dynamic_mlp_single_point `
-  --methods raw persistence gaussian_rw pyrecest_pf mlp_delta `
+  --methods raw persistence savgol_tangent gaussian_rw pyrecest_pf mlp_delta `
   --noise-deg 10 `
   --occlusion-prob 0.25
 
 python scripts\run_first_results_benchmark.py `
   --config configs\accad_dynamic_benchmark.example.json `
   --output runs\accad_dynamic_history_mlp_single_point `
-  --methods raw persistence gaussian_rw pyrecest_pf mlp_delta history_mlp_delta `
+  --methods raw persistence savgol_tangent gaussian_rw pyrecest_pf mlp_delta history_mlp_delta `
   --noise-deg 10 `
   --occlusion-prob 0.25
 ```
@@ -167,7 +168,7 @@ python scripts\run_private_accad_eval.py `
 ```
 
 The private runner selects bounded dynamic windows, runs the configured seed/particle/noise/occlusion grid,
-and aggregates `gaussian_rw`, `mlp_delta`, `history_mlp_delta`, and `gru_delta` into:
+and aggregates the configured particle filters plus deterministic smoother baselines into:
 
 - `runs/private_accad_eval/aggregate_benchmark_metrics.csv`
 - `runs/private_accad_eval/aggregate_transition_metrics.csv`
@@ -254,6 +255,8 @@ Useful optional fields:
 - `min_confidence`
 - `smoother_ema_alpha`
 - `smoother_chordal_window`
+- `savgol_tangent_window`
+- `savgol_tangent_degree`
 - `factorized_update`
 - `resample_threshold`
 - `ablation_particle_counts`
@@ -320,6 +323,7 @@ The smoothing baselines are deterministic references:
 
 - `smoother_ema`: causal per-joint exponential smoothing in the tangent space of the previous SO(3) estimate.
 - `smoother_chordal`: offline centered-window chordal mean over visible observations.
+- `savgol_tangent`: offline centered-window local polynomial smoothing in per-joint SO(3) tangent spaces. This is the strongest classical temporal smoother baseline currently included for noise/occlusion comparisons.
 
 The experiment outputs include research-oriented diagnostics beyond aggregate pose error:
 observed-vs-occluded joint errors, per-joint errors, and temporal acceleration/jerk metrics for the raw

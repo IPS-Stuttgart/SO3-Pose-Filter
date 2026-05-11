@@ -22,11 +22,15 @@ from pose_filter.evaluation import (  # noqa: E402
 )
 from pose_filter.experiment import load_config  # noqa: E402
 from pose_filter.plotting import heatmap_svg, line_plot_svg  # noqa: E402
+from pose_filter.smoothing import SmootherConfig  # noqa: E402
 from pose_filter.transitions import build_transition_model  # noqa: E402
 
 METHODS = (
     "raw",
     "persistence",
+    "smoother_ema",
+    "smoother_chordal",
+    "savgol_tangent",
     "deterministic_persistence_pf",
     "noisy_persistence_pf",
     "constant_velocity",
@@ -37,6 +41,11 @@ METHODS = (
     "history_mlp_delta",
     "gru_delta",
 )
+SMOOTHER_METHODS = {
+    "smoother_ema": "smoother_ema_error_deg",
+    "smoother_chordal": "smoother_chordal_error_deg",
+    "savgol_tangent": "savgol_tangent_error_deg",
+}
 
 
 def _float_list(value: Any, default: list[float]) -> list[float]:
@@ -88,30 +97,16 @@ def _method_row(
         "final_ess": float(source.get("final_ess", float("nan"))),
         "resample_count": float(source.get("resample_count", float("nan"))),
         "resample_fraction": float(source.get("resample_fraction", float("nan"))),
-        "mean_particle_spread_deg": float(
-            source.get("mean_particle_spread_deg", float("nan"))
-        ),
-        "min_particle_spread_deg": float(
-            source.get("min_particle_spread_deg", float("nan"))
-        ),
-        "final_particle_spread_deg": float(
-            source.get("final_particle_spread_deg", float("nan"))
-        ),
+        "mean_particle_spread_deg": float(source.get("mean_particle_spread_deg", float("nan"))),
+        "min_particle_spread_deg": float(source.get("min_particle_spread_deg", float("nan"))),
+        "final_particle_spread_deg": float(source.get("final_particle_spread_deg", float("nan"))),
         "collapse_fraction": float(source.get("collapse_fraction", float("nan"))),
-        "filter_reappeared_joint_error_deg": float(
-            source.get("filter_reappeared_joint_error_deg", float("nan"))
-        ),
-        "persistence_reappeared_joint_error_deg": float(
-            source.get("persistence_reappeared_joint_error_deg", float("nan"))
-        ),
-        "reappeared_joint_count": float(
-            source.get("reappeared_joint_count", float("nan"))
-        ),
+        "filter_reappeared_joint_error_deg": float(source.get("filter_reappeared_joint_error_deg", float("nan"))),
+        "persistence_reappeared_joint_error_deg": float(source.get("persistence_reappeared_joint_error_deg", float("nan"))),
+        "reappeared_joint_count": float(source.get("reappeared_joint_count", float("nan"))),
     }
-    if filter_backend == "none":
-        filter_diagnostics = {
-            key: float("nan") for key in filter_diagnostics
-        }
+    if filter_backend not in {"numpy", "pyrecest"}:
+        filter_diagnostics = {key: float("nan") for key in filter_diagnostics}
     return {
         "method": method,
         "noise_deg": float(source["noise_deg"]),
@@ -134,16 +129,7 @@ def _closest(values: list[float], target: float) -> float:
 
 
 def _method_means(rows: list[dict[str, Any]]) -> dict[str, float]:
-    return {
-        method: _mean(
-            [
-                float(row["tracking_error_deg"])
-                for row in rows
-                if row["method"] == method
-            ]
-        )
-        for method in sorted({row["method"] for row in rows})
-    }
+    return {method: _mean([float(row["tracking_error_deg"]) for row in rows if row["method"] == method]) for method in sorted({row["method"] for row in rows})}
 
 
 def _representative_rows(
@@ -154,15 +140,8 @@ def _representative_rows(
     if not rows:
         return []
     noise = _closest(sorted({float(row["noise_deg"]) for row in rows}), noise_deg)
-    occlusion = _closest(
-        sorted({float(row["occlusion_prob"]) for row in rows}), occlusion_prob
-    )
-    return [
-        row
-        for row in rows
-        if float(row["noise_deg"]) == noise
-        and float(row["occlusion_prob"]) == occlusion
-    ]
+    occlusion = _closest(sorted({float(row["occlusion_prob"]) for row in rows}), occlusion_prob)
+    return [row for row in rows if float(row["noise_deg"]) == noise and float(row["occlusion_prob"]) == occlusion]
 
 
 def _acceptance(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
@@ -176,63 +155,30 @@ def _acceptance(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str,
     target_method = str(
         config.get(
             "benchmark_acceptance_method",
-            "gru_delta"
-            if any(row["method"] == "gru_delta" for row in rows)
-            else "history_mlp_delta"
-            if any(row["method"] == "history_mlp_delta" for row in rows)
-            else "pyrecest_mlp_pf"
-            if any(row["method"] == "pyrecest_mlp_pf" for row in rows)
-            else "pyrecest_pf",
+            (
+                "gru_delta"
+                if any(row["method"] == "gru_delta" for row in rows)
+                else (
+                    "history_mlp_delta"
+                    if any(row["method"] == "history_mlp_delta" for row in rows)
+                    else "pyrecest_mlp_pf" if any(row["method"] == "pyrecest_mlp_pf" for row in rows) else "pyrecest_pf"
+                )
+            ),
         )
     )
     target = representative_by_method.get(target_method)
     return {
         "target_method": target_method,
-        "representative_noise_deg": representative[0]["noise_deg"]
-        if representative
-        else None,
-        "representative_occlusion_prob": representative[0]["occlusion_prob"]
-        if representative
-        else None,
-        "target_beats_raw_at_representative": (
-            bool(target["improvement_vs_raw_deg"] > 0.0)
-            if target is not None
-            else None
-        ),
-        "target_beats_persistence_at_representative": (
-            bool(target["improvement_vs_persistence_deg"] > 0.0)
-            if target is not None
-            else None
-        ),
-        "target_beats_raw_any": any(
-            row["method"] == target_method and float(row["improvement_vs_raw_deg"]) > 0.0
-            for row in rows
-        ),
-        "target_beats_persistence_any": any(
-            row["method"] == target_method
-            and float(row["improvement_vs_persistence_deg"]) > 0.0
-            for row in rows
-        ),
-        "pyrecest_pf_beats_raw_at_representative": (
-            bool(pyrecest["improvement_vs_raw_deg"] > 0.0)
-            if pyrecest is not None
-            else None
-        ),
-        "pyrecest_pf_beats_persistence_at_representative": (
-            bool(pyrecest["improvement_vs_persistence_deg"] > 0.0)
-            if pyrecest is not None
-            else None
-        ),
-        "pyrecest_pf_beats_raw_any": any(
-            row["method"] == "pyrecest_pf"
-            and float(row["improvement_vs_raw_deg"]) > 0.0
-            for row in rows
-        ),
-        "pyrecest_pf_beats_persistence_any": any(
-            row["method"] == "pyrecest_pf"
-            and float(row["improvement_vs_persistence_deg"]) > 0.0
-            for row in rows
-        ),
+        "representative_noise_deg": representative[0]["noise_deg"] if representative else None,
+        "representative_occlusion_prob": representative[0]["occlusion_prob"] if representative else None,
+        "target_beats_raw_at_representative": (bool(target["improvement_vs_raw_deg"] > 0.0) if target is not None else None),
+        "target_beats_persistence_at_representative": (bool(target["improvement_vs_persistence_deg"] > 0.0) if target is not None else None),
+        "target_beats_raw_any": any(row["method"] == target_method and float(row["improvement_vs_raw_deg"]) > 0.0 for row in rows),
+        "target_beats_persistence_any": any(row["method"] == target_method and float(row["improvement_vs_persistence_deg"]) > 0.0 for row in rows),
+        "pyrecest_pf_beats_raw_at_representative": (bool(pyrecest["improvement_vs_raw_deg"] > 0.0) if pyrecest is not None else None),
+        "pyrecest_pf_beats_persistence_at_representative": (bool(pyrecest["improvement_vs_persistence_deg"] > 0.0) if pyrecest is not None else None),
+        "pyrecest_pf_beats_raw_any": any(row["method"] == "pyrecest_pf" and float(row["improvement_vs_raw_deg"]) > 0.0 for row in rows),
+        "pyrecest_pf_beats_persistence_any": any(row["method"] == "pyrecest_pf" and float(row["improvement_vs_persistence_deg"]) > 0.0 for row in rows),
     }
 
 
@@ -246,17 +192,19 @@ def _write_plots(
     plot_method = str(
         config.get(
             "benchmark_heatmap_method",
-            "pyrecest_mlp_pf"
-            if "pyrecest_mlp_pf" in methods
-            else "gru_delta"
-            if "gru_delta" in methods
-            else "history_mlp_delta"
-            if "history_mlp_delta" in methods
-            else "constant_velocity"
-            if "constant_velocity" in methods
-            else "pyrecest_pf"
-            if "pyrecest_pf" in methods
-            else "gaussian_rw",
+            (
+                "pyrecest_mlp_pf"
+                if "pyrecest_mlp_pf" in methods
+                else (
+                    "gru_delta"
+                    if "gru_delta" in methods
+                    else (
+                        "history_mlp_delta"
+                        if "history_mlp_delta" in methods
+                        else "constant_velocity" if "constant_velocity" in methods else "pyrecest_pf" if "pyrecest_pf" in methods else "gaussian_rw"
+                    )
+                )
+            ),
         )
     )
     heatmap_rows = [row for row in rows if row["method"] == plot_method]
@@ -278,16 +226,10 @@ def _write_plots(
         occlusion_values,
         float(config.get("benchmark_plot_occlusion_prob", config["occlusion_prob"])),
     )
-    curve_rows = [
-        row for row in rows if float(row["occlusion_prob"]) == curve_occlusion
-    ]
+    curve_rows = [row for row in rows if float(row["occlusion_prob"]) == curve_occlusion]
     series: dict[str, list[tuple[float, float]]] = {}
     for method in methods:
-        points = [
-            (float(row["noise_deg"]), float(row["tracking_error_deg"]))
-            for row in curve_rows
-            if row["method"] == method
-        ]
+        points = [(float(row["noise_deg"]), float(row["tracking_error_deg"])) for row in curve_rows if row["method"] == method]
         if points:
             series[method] = sorted(points, key=lambda item: item[0])
     curve_path = plots_dir / "filter_vs_baselines.svg"
@@ -311,6 +253,15 @@ def _process_noise_cap(config: dict[str, Any]) -> float | None:
     return np.radians(float(process_noise_deg))
 
 
+def _smoother_config(config: dict[str, Any]) -> SmootherConfig:
+    return SmootherConfig(
+        ema_alpha=float(config.get("smoother_ema_alpha", 0.35)),
+        chordal_window=int(config.get("smoother_chordal_window", 5)),
+        tangent_savgol_window=int(config.get("savgol_tangent_window", 7)),
+        tangent_savgol_degree=int(config.get("savgol_tangent_degree", 2)),
+    )
+
+
 def run_first_results_benchmark(
     config: dict[str, Any],
     output_dir: str | Path,
@@ -329,9 +280,7 @@ def run_first_results_benchmark(
     )
     occlusion_grid = occlusion_grid or _float_list(
         config.get("benchmark_occlusion_prob"),
-        _float_list(
-            config.get("robustness_occlusion_prob"), [float(config["occlusion_prob"])]
-        ),
+        _float_list(config.get("robustness_occlusion_prob"), [float(config["occlusion_prob"])]),
     )
     config_methods = config.get("benchmark_methods") if methods is None else None
     if config_methods is None and methods is None:
@@ -372,6 +321,7 @@ def run_first_results_benchmark(
     min_confidence = float(config.get("min_confidence", 0.2))
     factorized_update = bool(config.get("factorized_update", True))
     resample_threshold = float(config.get("resample_threshold", 0.5))
+    smoother_config = _smoother_config(config)
     base_rows = robustness_rows(
         test,
         gaussian_model,
@@ -385,10 +335,9 @@ def run_first_results_benchmark(
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
         filter_backend="numpy",
+        smoother_config=smoother_config,
     )
-    collapse_ablation_proposal_gain = float(
-        config.get("collapse_ablation_proposal_gain", 0.0)
-    )
+    collapse_ablation_proposal_gain = float(config.get("collapse_ablation_proposal_gain", 0.0))
     deterministic_persistence_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
     needs_deterministic_persistence_pf = "deterministic_persistence_pf" in methods
     if needs_deterministic_persistence_pf:
@@ -410,10 +359,9 @@ def run_first_results_benchmark(
             factorized_update=factorized_update,
             resample_threshold=resample_threshold,
             filter_backend="numpy",
+            smoother_config=smoother_config,
         )
-        deterministic_persistence_rows_by_key = {
-            _grid_key(row): row for row in deterministic_persistence_rows
-        }
+        deterministic_persistence_rows_by_key = {_grid_key(row): row for row in deterministic_persistence_rows}
     noisy_persistence_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
     needs_noisy_persistence_pf = "noisy_persistence_pf" in methods
     if needs_noisy_persistence_pf:
@@ -436,10 +384,9 @@ def run_first_results_benchmark(
             factorized_update=factorized_update,
             resample_threshold=resample_threshold,
             filter_backend="numpy",
+            smoother_config=smoother_config,
         )
-        noisy_persistence_rows_by_key = {
-            _grid_key(row): row for row in noisy_persistence_rows
-        }
+        noisy_persistence_rows_by_key = {_grid_key(row): row for row in noisy_persistence_rows}
     constant_velocity_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
     needs_constant_velocity = "constant_velocity" in methods
     if needs_constant_velocity:
@@ -460,6 +407,7 @@ def run_first_results_benchmark(
             factorized_update=factorized_update,
             resample_threshold=resample_threshold,
             filter_backend="numpy",
+            smoother_config=smoother_config,
         )
         constant_velocity_rows_by_key = {_grid_key(row): row for row in constant_velocity_rows}
     pyrecest_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
@@ -477,6 +425,7 @@ def run_first_results_benchmark(
             factorized_update=factorized_update,
             resample_threshold=resample_threshold,
             filter_backend="pyrecest",
+            smoother_config=smoother_config,
         )
         pyrecest_rows_by_key = {_grid_key(row): row for row in pyrecest_rows}
     mlp_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
@@ -503,6 +452,7 @@ def run_first_results_benchmark(
                 factorized_update=factorized_update,
                 resample_threshold=resample_threshold,
                 filter_backend="numpy",
+                smoother_config=smoother_config,
             )
             mlp_rows_by_key = {_grid_key(row): row for row in mlp_rows}
         if "pyrecest_mlp_pf" in methods:
@@ -519,10 +469,9 @@ def run_first_results_benchmark(
                 factorized_update=factorized_update,
                 resample_threshold=resample_threshold,
                 filter_backend="pyrecest",
+                smoother_config=smoother_config,
             )
-            pyrecest_mlp_rows_by_key = {
-                _grid_key(row): row for row in pyrecest_mlp_rows
-            }
+            pyrecest_mlp_rows_by_key = {_grid_key(row): row for row in pyrecest_mlp_rows}
     history_mlp_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
     needs_history_mlp = "history_mlp_delta" in methods
     if needs_history_mlp:
@@ -545,6 +494,7 @@ def run_first_results_benchmark(
             factorized_update=factorized_update,
             resample_threshold=resample_threshold,
             filter_backend="numpy",
+            smoother_config=smoother_config,
         )
         history_mlp_rows_by_key = {_grid_key(row): row for row in history_mlp_rows}
     gru_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
@@ -569,6 +519,7 @@ def run_first_results_benchmark(
             factorized_update=factorized_update,
             resample_threshold=resample_threshold,
             filter_backend="numpy",
+            smoother_config=smoother_config,
         )
         gru_rows_by_key = {_grid_key(row): row for row in gru_rows}
 
@@ -599,6 +550,19 @@ def run_first_results_benchmark(
                     num_particles,
                 )
             )
+        for smoother_method, metric in SMOOTHER_METHODS.items():
+            if smoother_method in methods:
+                rows.append(
+                    _method_row(
+                        smoother_method,
+                        base_row,
+                        base_row,
+                        metric,
+                        smoother_method,
+                        "offline_smoother",
+                        num_particles,
+                    )
+                )
         if "deterministic_persistence_pf" in methods:
             rows.append(
                 _method_row(
@@ -802,9 +766,7 @@ def run_first_results_benchmark(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run the compact first-results benchmark across noise/occlusion."
-    )
+    parser = argparse.ArgumentParser(description="Run the compact first-results benchmark across noise/occlusion.")
     parser.add_argument("--config", required=True, help="Path to JSON config.")
     parser.add_argument(
         "--output",
@@ -835,10 +797,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    output_dir = Path(
-        args.output
-        or config.get("benchmark_output_dir", "runs/first_results_benchmark")
-    )
+    output_dir = Path(args.output or config.get("benchmark_output_dir", "runs/first_results_benchmark"))
     methods = tuple(args.methods) if args.methods is not None else None
     payload = run_first_results_benchmark(
         config,

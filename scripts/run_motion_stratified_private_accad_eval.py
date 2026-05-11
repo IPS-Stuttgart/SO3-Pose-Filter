@@ -23,6 +23,9 @@ from pose_filter.evaluation import write_csv, write_json  # noqa: E402
 DEFAULT_METHODS = (
     "raw",
     "persistence",
+    "smoother_ema",
+    "smoother_chordal",
+    "savgol_tangent",
     "deterministic_persistence_pf",
     "noisy_persistence_pf",
     "constant_velocity",
@@ -310,7 +313,9 @@ def _particle_collapse_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any
     groups = sorted({(str(row["motion_bin"]), str(row["method"])) for row in rows})
     out = []
     for motion_bin, method in groups:
-        method_rows = [row for row in rows if str(row["motion_bin"]) == motion_bin and str(row["method"]) == method and str(row.get("filter_backend", "none")) != "none"]
+        method_rows = [
+            row for row in rows if str(row["motion_bin"]) == motion_bin and str(row["method"]) == method and str(row.get("filter_backend", "none")) in {"numpy", "pyrecest"}
+        ]
         if not method_rows:
             continue
         out.append(

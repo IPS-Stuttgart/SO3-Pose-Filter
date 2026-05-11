@@ -3,11 +3,13 @@ from __future__ import annotations
 import unittest
 
 import numpy as np
+from _path import SRC  # noqa: F401
 
 from pose_filter.smoothing import (
     run_baseline_smoothers,
     sliding_chordal_mean_smoother,
     tangent_exponential_smoother,
+    tangent_savgol_smoother,
 )
 from pose_filter.so3 import axis_angle_to_matrix, geodesic_distance
 
@@ -52,9 +54,29 @@ class SmoothingTests(unittest.TestCase):
 
         outputs = run_baseline_smoothers(rotations, mask)
 
-        self.assertEqual(set(outputs), {"smoother_ema", "smoother_chordal"})
+        self.assertEqual(set(outputs), {"smoother_ema", "smoother_chordal", "savgol_tangent"})
         for estimates in outputs.values():
             self.assertEqual(estimates.shape, rotations.shape)
+
+    def test_tangent_savgol_smoother_bridges_single_frame_occlusion(self) -> None:
+        rotations = axis_angle_to_matrix(
+            np.array(
+                [
+                    [[0.0, 0.0, 0.0]],
+                    [[0.0, 0.0, 0.1]],
+                    [[0.0, 0.0, 0.2]],
+                    [[0.0, 0.0, 0.3]],
+                    [[0.0, 0.0, 0.4]],
+                ],
+                dtype=np.float64,
+            )
+        )
+        mask = np.ones((5, 1), dtype=bool)
+        mask[2, 0] = False
+
+        smoothed = tangent_savgol_smoother(rotations, mask, window=5, degree=1)
+
+        self.assertLess(float(geodesic_distance(smoothed[2, 0], rotations[2, 0])), 1e-6)
 
 
 if __name__ == "__main__":
