@@ -1,0 +1,187 @@
+name: Accuracy Leaderboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      accad_artifact_id:
+        description: "Artifact ID from a successful ACCAD full-data run. Leave empty to skip ACCAD."
+        required: false
+        default: ""
+      kit_artifact_id:
+        description: "Artifact ID from a successful KIT full-data run. Leave empty to skip KIT."
+        required: false
+        default: ""
+      output_dir:
+        description: "Output directory for the generated leaderboard."
+        required: true
+        default: runs/accuracy_leaderboard
+      artifact_name_prefix:
+        description: "Prefix for the uploaded leaderboard artifact."
+        required: true
+        default: so3-pose-filter-accuracy-leaderboard
+      artifact_retention_days:
+        description: "Number of days to retain the uploaded leaderboard artifact."
+        required: true
+        default: "90"
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: accuracy-leaderboard-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-accuracy-leaderboard:
+    name: Build paper-facing accuracy leaderboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ACCAD_ARTIFACT_ID: ${{ inputs.accad_artifact_id }}
+      KIT_ARTIFACT_ID: ${{ inputs.kit_artifact_id }}
+      OUTPUT_DIR: ${{ inputs.output_dir }}
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install lightweight leaderboard dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install numpy
+
+      - name: Download selected benchmark artifacts
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import urllib.request
+          import zipfile
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GITHUB_TOKEN"]
+          out_root = Path("downloaded_benchmark_artifacts")
+          out_root.mkdir(parents=True, exist_ok=True)
+
+          artifacts = {
+              "ACCAD": os.environ.get("ACCAD_ARTIFACT_ID", "").strip(),
+              "KIT": os.environ.get("KIT_ARTIFACT_ID", "").strip(),
+          }
+          if not any(artifacts.values()):
+              raise SystemExit("At least one artifact id is required.")
+
+          for label, artifact_id in artifacts.items():
+              if not artifact_id:
+                  continue
+              url = f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip"
+              zip_path = out_root / f"{label.lower()}_artifact.zip"
+              extract_dir = out_root / label.lower()
+              extract_dir.mkdir(parents=True, exist_ok=True)
+
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=300) as response:
+                  zip_path.write_bytes(response.read())
+
+              with zipfile.ZipFile(zip_path) as archive:
+                  archive.extractall(extract_dir)
+
+              print(f"Extracted {label} artifact {artifact_id} to {extract_dir}")
+          PY
+
+      - name: Locate benchmark result roots
+        run: |
+          set -euo pipefail
+
+          find_motion_root() {
+            local label="$1"
+            local root="downloaded_benchmark_artifacts/${label}"
+            if [ ! -d "$root" ]; then
+              return 0
+            fi
+            find "$root" -type f \( \
+              -name "aggregate_method_means_by_noise_occlusion_motion.csv" -o \
+              -name "aggregate_method_means_by_motion_bin.csv" \
+            \) -printf '%h\n' | sort -u | head -n 1
+          }
+
+          ACCAD_ROOT="$(find_motion_root accad || true)"
+          KIT_ROOT="$(find_motion_root kit || true)"
+
+          {
+            echo "ACCAD_ROOT=$ACCAD_ROOT"
+            echo "KIT_ROOT=$KIT_ROOT"
+          } >> "$GITHUB_ENV"
+
+          echo "ACCAD_ROOT=$ACCAD_ROOT"
+          echo "KIT_ROOT=$KIT_ROOT"
+
+          if [ -z "$ACCAD_ROOT" ] && [ -z "$KIT_ROOT" ]; then
+            echo "Could not find aggregate_method_means_by_*.csv in any downloaded artifact." >&2
+            find downloaded_benchmark_artifacts -maxdepth 5 -type f | sort >&2
+            exit 1
+          fi
+
+      - name: Build accuracy leaderboard
+        run: |
+          set -euo pipefail
+          args=()
+
+          if [ -n "${ACCAD_ROOT:-}" ]; then
+            args+=(--motion-run "ACCAD=${ACCAD_ROOT}")
+          fi
+          if [ -n "${KIT_ROOT:-}" ]; then
+            args+=(--motion-run "KIT=${KIT_ROOT}")
+          fi
+
+          python scripts/build_accuracy_leaderboard.py \
+            "${args[@]}" \
+            --output-dir "$OUTPUT_DIR"
+
+          echo "Generated leaderboard files:"
+          find "$OUTPUT_DIR" -maxdepth 2 -type f | sort
+
+      - name: Validate leaderboard outputs
+        run: |
+          set -euo pipefail
+          test -s "$OUTPUT_DIR/accuracy_leaderboard.csv"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard.json"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard.md"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard.tex"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          output_dir = Path(os.environ["OUTPUT_DIR"])
+          payload = json.loads((output_dir / "accuracy_leaderboard.json").read_text(encoding="utf-8"))
+          if int(payload.get("row_count", 0)) <= 0:
+              raise SystemExit("accuracy_leaderboard.json has no rows")
+          print(json.dumps({"row_count": payload["row_count"]}, indent=2))
+          PY
+
+      - name: Upload accuracy leaderboard
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name_prefix }}-${{ github.run_number }}-${{ github.sha }}
+          retention-days: ${{ inputs.artifact_retention_days }}
+          path: ${{ inputs.output_dir }}
