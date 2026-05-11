@@ -47,11 +47,25 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from pose_filter.detector_evaluation import (  # noqa: E402
-    DETECTOR_SUMMARY_KEYS,
-    load_detector_eval_config,
-    run_detector_measurement_eval,
-)
+DETECTOR_SUMMARY_KEYS = [
+    "observed_error_deg",
+    "observed_joint_error_deg",
+    "filter_error_deg",
+    "persistence_error_deg",
+    "filter_observed_joint_error_deg",
+    "filter_occluded_joint_error_deg",
+    "persistence_observed_joint_error_deg",
+    "persistence_occluded_joint_error_deg",
+    "mean_confidence",
+    "observed_joint_fraction",
+    "mean_ess",
+    "min_ess",
+    "final_ess",
+    "resample_count",
+    "resample_fraction",
+    "mean_particle_spread_deg",
+    "final_particle_spread_deg",
+]
 
 LEADERBOARD_COLUMNS = [
     "rank",
@@ -503,6 +517,15 @@ def parse_method(value: str) -> MethodSpec:
     )
 
 
+def _load_detector_evaluation_tools() -> tuple[Any, Any]:
+    from pose_filter.detector_evaluation import (  # noqa: PLC0415
+        load_detector_eval_config,
+        run_detector_measurement_eval,
+    )
+
+    return load_detector_eval_config, run_detector_measurement_eval
+
+
 def _run_detector_methods(
     *,
     eval_config_path: Path,
@@ -511,6 +534,7 @@ def _run_detector_methods(
 ) -> list[DetectorRunSpec]:
     if not method_specs:
         raise ValueError("--eval-config requires at least one --method")
+    load_detector_eval_config, run_detector_measurement_eval = _load_detector_evaluation_tools()
     base_config = load_detector_eval_config(eval_config_path)
     run_specs = []
     runs_root = output_dir / "detector_method_runs"

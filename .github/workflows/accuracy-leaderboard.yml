@@ -67,6 +67,7 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import os
+          import urllib.error
           import urllib.request
           import zipfile
           from pathlib import Path
@@ -83,14 +84,11 @@ jobs:
           if not any(artifacts.values()):
               raise SystemExit("At least one artifact id is required.")
 
-          for label, artifact_id in artifacts.items():
-              if not artifact_id:
-                  continue
-              url = f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip"
-              zip_path = out_root / f"{label.lower()}_artifact.zip"
-              extract_dir = out_root / label.lower()
-              extract_dir.mkdir(parents=True, exist_ok=True)
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
 
+          def download_artifact_zip(url: str, token: str, output: Path) -> None:
               request = urllib.request.Request(
                   url,
                   headers={
@@ -99,8 +97,34 @@ jobs:
                       "X-GitHub-Api-Version": "2022-11-28",
                   },
               )
-              with urllib.request.urlopen(request, timeout=300) as response:
-                  zip_path.write_bytes(response.read())
+              opener = urllib.request.build_opener(NoRedirect)
+              try:
+                  with opener.open(request, timeout=300) as response:
+                      output.write_bytes(response.read())
+                      return
+              except urllib.error.HTTPError as exc:
+                  if exc.code not in {302, 303, 307, 308}:
+                      raise
+                  signed_url = exc.headers.get("Location")
+                  if not signed_url:
+                      raise SystemExit(f"artifact download did not return a redirect URL: {url}") from exc
+
+              signed_request = urllib.request.Request(
+                  signed_url,
+                  headers={"User-Agent": "SO3-Pose-Filter-accuracy-leaderboard/1.0"},
+              )
+              with urllib.request.urlopen(signed_request, timeout=300) as response:
+                  output.write_bytes(response.read())
+
+          for label, artifact_id in artifacts.items():
+              if not artifact_id:
+                  continue
+              url = f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip"
+              zip_path = out_root / f"{label.lower()}_artifact.zip"
+              extract_dir = out_root / label.lower()
+              extract_dir.mkdir(parents=True, exist_ok=True)
+
+              download_artifact_zip(url, token, zip_path)
 
               with zipfile.ZipFile(zip_path) as archive:
                   archive.extractall(extract_dir)
