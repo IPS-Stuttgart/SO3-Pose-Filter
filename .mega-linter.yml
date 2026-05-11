@@ -4,7 +4,7 @@ SHOW_ELAPSED_TIME: true
 
 PRE_COMMANDS:
   - command: cat /etc/os-release
-  - command: pip install -e .
+  - command: pip install -e /github/workspace
     venv: pylint
 
 PYTHON_PYLINT_CONFIG_FILE: LINTER_DEFAULT
