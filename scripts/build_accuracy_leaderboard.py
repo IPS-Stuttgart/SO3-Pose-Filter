@@ -40,6 +40,7 @@ import csv
 import json
 import math
 import sys
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -71,6 +72,9 @@ LEADERBOARD_COLUMNS = [
     "rank",
     "dataset",
     "source",
+    "motion_bin",
+    "noise_deg",
+    "occlusion_prob",
     "method",
     "transition_model",
     "filter_backend",
@@ -87,6 +91,26 @@ LEADERBOARD_COLUMNS = [
     "collapse_fraction",
     "row_count",
 ]
+
+PAPER_SUMMARY_COLUMNS = [
+    "dataset",
+    "source",
+    "motion_bin",
+    "method",
+    "condition_count",
+    "win_count",
+    "mean_tracking_error_deg",
+    "mean_raw_measurement_error_deg",
+    "mean_persistence_error_deg",
+    "mean_improvement_vs_raw_deg",
+    "mean_improvement_vs_persistence_deg",
+    "worse_than_raw_count",
+    "worse_than_persistence_count",
+    "row_count",
+]
+
+RAW_METHODS = {"raw", "raw_measurement"}
+PERSISTENCE_METHODS = {"persistence", "deterministic_persistence_pf"}
 
 
 @dataclass(frozen=True)
@@ -178,6 +202,15 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow({key: row.get(key, "") for key in LEADERBOARD_COLUMNS})
 
 
+def _write_table_csv(path: Path, rows: list[dict[str, Any]], columns: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in columns})
+
+
 def _escape_markdown(value: Any) -> str:
     return _format_cell(value).replace("|", "\\|")
 
@@ -188,13 +221,16 @@ def _write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
         "rank",
         "dataset",
         "source",
+        "motion bin",
+        "noise",
+        "occlusion",
         "method",
-        "tracking ↓",
+        "tracking (deg)",
         "visible",
         "occluded",
         "reappeared",
-        "Δ raw ↑",
-        "Δ pers. ↑",
+        "delta raw",
+        "delta pers.",
         "ESS",
         "collapse",
         "rows",
@@ -203,6 +239,9 @@ def _write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
         "rank",
         "dataset",
         "source",
+        "motion_bin",
+        "noise_deg",
+        "occlusion_prob",
         "method",
         "tracking_error_deg",
         "visible_error_deg",
@@ -253,6 +292,9 @@ def _write_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "rank",
         "dataset",
         "source",
+        "motion_bin",
+        "noise_deg",
+        "occlusion_prob",
         "method",
         "tracking_error_deg",
         "visible_error_deg",
@@ -265,20 +307,23 @@ def _write_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "Rank",
         "Dataset",
         "Source",
+        "Motion bin",
+        "Noise",
+        "Occl. prob.",
         "Method",
-        "Track. ↓",
+        "Track.",
         "Vis.",
         "Occl.",
         "Reapp.",
-        "Δ raw ↑",
-        "Δ pers. ↑",
+        r"$\Delta$ raw",
+        r"$\Delta$ pers.",
     ]
     lines = [
         r"\begin{table*}[t]",
         r"\centering",
         r"\caption{Accuracy leaderboard. Lower tracking error is better. Positive improvements indicate lower error than the baseline.}",
         r"\label{tab:accuracy-leaderboard}",
-        r"\begin{tabular}{rlllrrrrrr}",
+        r"\begin{tabular}{rllllllrrrrrr}",
         r"\toprule",
         " & ".join(headers) + r" \\",
         r"\midrule",
@@ -295,6 +340,12 @@ def _standard_outputs(output_dir: Path) -> dict[str, str]:
         "json": str(output_dir / "accuracy_leaderboard.json"),
         "markdown": str(output_dir / "accuracy_leaderboard.md"),
         "latex": str(output_dir / "accuracy_leaderboard.tex"),
+        "paper_summary_csv": str(output_dir / "accuracy_leaderboard_paper_summary.csv"),
+        "paper_summary_json": str(output_dir / "accuracy_leaderboard_paper_summary.json"),
+        "paper_summary_markdown": str(output_dir / "accuracy_leaderboard_paper_summary.md"),
+        "paper_summary_latex": str(output_dir / "accuracy_leaderboard_paper_summary.tex"),
+        "sanity_report_json": str(output_dir / "accuracy_leaderboard_sanity_report.json"),
+        "sanity_report_markdown": str(output_dir / "accuracy_leaderboard_sanity_report.md"),
     }
 
 
@@ -314,6 +365,9 @@ def _method_baseline_rows(
             {
                 "dataset": dataset,
                 "source": source,
+                "motion_bin": "",
+                "noise_deg": "",
+                "occlusion_prob": "",
                 "method": "raw_measurement",
                 "transition_model": "none",
                 "filter_backend": "none",
@@ -336,6 +390,9 @@ def _method_baseline_rows(
             {
                 "dataset": dataset,
                 "source": source,
+                "motion_bin": "",
+                "noise_deg": "",
+                "occlusion_prob": "",
                 "method": "persistence",
                 "transition_model": "deterministic_persistence",
                 "filter_backend": "none",
@@ -386,6 +443,9 @@ def _detector_row(
     return {
         "dataset": dataset,
         "source": "detector_hmr",
+        "motion_bin": "",
+        "noise_deg": "",
+        "occlusion_prob": "",
         "method": method,
         "transition_model": summary.get("transition_model", ""),
         "filter_backend": summary.get("filter_backend", ""),
@@ -455,6 +515,9 @@ def _coerce_motion_row(row: dict[str, str], dataset: str) -> dict[str, Any]:
     return {
         "dataset": dataset,
         "source": source,
+        "motion_bin": motion_bin,
+        "noise_deg": row.get("noise_deg", ""),
+        "occlusion_prob": row.get("occlusion_prob", ""),
         "method": method,
         "transition_model": row.get("transition_model", method),
         "filter_backend": row.get("filter_backend", ""),
@@ -557,7 +620,14 @@ def _deduplicate_baselines(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out = []
     seen_baselines = set()
     for row in rows:
-        key = (row.get("dataset"), row.get("source"), row.get("method"))
+        key = (
+            row.get("dataset"),
+            row.get("source"),
+            row.get("motion_bin"),
+            row.get("noise_deg"),
+            row.get("occlusion_prob"),
+            row.get("method"),
+        )
         if row.get("method") in {"raw_measurement", "persistence"}:
             if key in seen_baselines:
                 continue
@@ -573,15 +643,24 @@ def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         key=lambda row: (
             str(row.get("dataset", "")),
             str(row.get("source", "")),
+            str(row.get("motion_bin", "")),
+            _float_or_nan(row.get("noise_deg")) if math.isfinite(_float_or_nan(row.get("noise_deg"))) else -1.0,
+            _float_or_nan(row.get("occlusion_prob")) if math.isfinite(_float_or_nan(row.get("occlusion_prob"))) else -1.0,
             _float_or_nan(row.get("tracking_error_deg")) if math.isfinite(_float_or_nan(row.get("tracking_error_deg"))) else float("inf"),
             str(row.get("method", "")),
         ),
     )
     ranked = []
-    previous_group: tuple[str, str] | None = None
+    previous_group: tuple[str, str, str, str, str] | None = None
     rank = 0
     for row in rows:
-        group = (str(row.get("dataset", "")), str(row.get("source", "")))
+        group = (
+            str(row.get("dataset", "")),
+            str(row.get("source", "")),
+            str(row.get("motion_bin", "")),
+            str(row.get("noise_deg", "")),
+            str(row.get("occlusion_prob", "")),
+        )
         if group != previous_group:
             rank = 1
             previous_group = group
@@ -589,6 +668,329 @@ def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             rank += 1
         ranked.append({"rank": rank, **row})
     return ranked
+
+
+def _condition_key(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    return (
+        str(row.get("dataset", "")),
+        str(row.get("source", "")),
+        str(row.get("motion_bin", "")),
+        str(row.get("noise_deg", "")),
+        str(row.get("occlusion_prob", "")),
+    )
+
+
+def _paper_group_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(row.get("dataset", "")),
+        str(row.get("source", "")),
+        str(row.get("motion_bin", "")),
+        str(row.get("method", "")),
+    )
+
+
+def _sum_row_counts(rows: list[dict[str, Any]]) -> int | str:
+    values = [_int_or_blank(row.get("row_count", "")) for row in rows]
+    numeric = [value for value in values if isinstance(value, int)]
+    if not numeric:
+        return ""
+    return int(sum(numeric))
+
+
+def build_paper_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    condition_groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    paper_groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        condition_groups[_condition_key(row)].append(row)
+        paper_groups[_paper_group_key(row)].append(row)
+
+    win_counts: dict[tuple[str, str, str, str], int] = defaultdict(int)
+    for condition_rows in condition_groups.values():
+        finite_rows = [row for row in condition_rows if math.isfinite(_float_or_nan(row.get("tracking_error_deg")))]
+        if not finite_rows:
+            continue
+        best = min(_float_or_nan(row.get("tracking_error_deg")) for row in finite_rows)
+        for row in finite_rows:
+            if math.isclose(_float_or_nan(row.get("tracking_error_deg")), best, rel_tol=1e-12, abs_tol=1e-12):
+                win_counts[_paper_group_key(row)] += 1
+
+    summary_rows = []
+    for key, group_rows in paper_groups.items():
+        dataset, source, motion_bin, method = key
+        condition_count = len({_condition_key(row) for row in group_rows})
+        summary_rows.append(
+            {
+                "dataset": dataset,
+                "source": source,
+                "motion_bin": motion_bin,
+                "method": method,
+                "condition_count": condition_count,
+                "win_count": win_counts.get(key, 0),
+                "mean_tracking_error_deg": _nanmean(row.get("tracking_error_deg") for row in group_rows),
+                "mean_raw_measurement_error_deg": _nanmean(row.get("raw_measurement_error_deg") for row in group_rows),
+                "mean_persistence_error_deg": _nanmean(row.get("persistence_error_deg") for row in group_rows),
+                "mean_improvement_vs_raw_deg": _nanmean(row.get("improvement_vs_raw_deg") for row in group_rows),
+                "mean_improvement_vs_persistence_deg": _nanmean(row.get("improvement_vs_persistence_deg") for row in group_rows),
+                "worse_than_raw_count": sum(1 for row in group_rows if _float_or_nan(row.get("improvement_vs_raw_deg")) < 0.0),
+                "worse_than_persistence_count": sum(1 for row in group_rows if _float_or_nan(row.get("improvement_vs_persistence_deg")) < 0.0),
+                "row_count": _sum_row_counts(group_rows),
+            }
+        )
+    return sorted(
+        summary_rows,
+        key=lambda row: (
+            str(row.get("dataset", "")),
+            str(row.get("source", "")),
+            str(row.get("motion_bin", "")),
+            _float_or_nan(row.get("mean_tracking_error_deg")) if math.isfinite(_float_or_nan(row.get("mean_tracking_error_deg"))) else float("inf"),
+            str(row.get("method", "")),
+        ),
+    )
+
+
+def build_sanity_report(
+    rows: list[dict[str, Any]],
+    paper_summary: list[dict[str, Any]],
+) -> dict[str, Any]:
+    condition_groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    context_method_counts: dict[tuple[str, str, str, str, str, str], int] = defaultdict(int)
+    for row in rows:
+        condition_key = _condition_key(row)
+        condition_groups[condition_key].append(row)
+        context_method_counts[(*condition_key, str(row.get("method", "")))] += 1
+
+    duplicate_context_rows = [
+        {
+            "dataset": key[0],
+            "source": key[1],
+            "motion_bin": key[2],
+            "noise_deg": key[3],
+            "occlusion_prob": key[4],
+            "method": key[5],
+            "count": count,
+        }
+        for key, count in sorted(context_method_counts.items())
+        if count > 1
+    ]
+
+    missing_baseline_conditions = []
+    for condition_key, condition_rows in sorted(condition_groups.items()):
+        methods = {str(row.get("method", "")) for row in condition_rows}
+        missing = []
+        if not methods.intersection(RAW_METHODS):
+            missing.append("raw")
+        if not methods.intersection(PERSISTENCE_METHODS):
+            missing.append("persistence")
+        if missing:
+            missing_baseline_conditions.append(
+                {
+                    "dataset": condition_key[0],
+                    "source": condition_key[1],
+                    "motion_bin": condition_key[2],
+                    "noise_deg": condition_key[3],
+                    "occlusion_prob": condition_key[4],
+                    "missing": missing,
+                }
+            )
+
+    worse_than_raw = [row for row in paper_summary if int(row.get("worse_than_raw_count", 0)) > 0 and str(row.get("method", "")) not in RAW_METHODS]
+    worse_than_persistence = [row for row in paper_summary if int(row.get("worse_than_persistence_count", 0)) > 0 and str(row.get("method", "")) not in PERSISTENCE_METHODS]
+
+    best_methods = []
+    summary_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in paper_summary:
+        summary_groups[
+            (
+                str(row.get("dataset", "")),
+                str(row.get("source", "")),
+                str(row.get("motion_bin", "")),
+            )
+        ].append(row)
+    for summary_key, group_rows in sorted(summary_groups.items()):
+        finite_rows = [row for row in group_rows if math.isfinite(_float_or_nan(row.get("mean_tracking_error_deg")))]
+        if not finite_rows:
+            continue
+        best = min(finite_rows, key=lambda row: _float_or_nan(row.get("mean_tracking_error_deg")))
+        best_methods.append(
+            {
+                "dataset": summary_key[0],
+                "source": summary_key[1],
+                "motion_bin": summary_key[2],
+                "method": best.get("method", ""),
+                "mean_tracking_error_deg": best.get("mean_tracking_error_deg", ""),
+                "mean_improvement_vs_raw_deg": best.get("mean_improvement_vs_raw_deg", ""),
+                "mean_improvement_vs_persistence_deg": best.get(
+                    "mean_improvement_vs_persistence_deg",
+                    "",
+                ),
+                "condition_count": best.get("condition_count", ""),
+                "win_count": best.get("win_count", ""),
+            }
+        )
+
+    return {
+        "row_count": len(rows),
+        "condition_count": len(condition_groups),
+        "paper_summary_row_count": len(paper_summary),
+        "duplicate_context_rows": duplicate_context_rows,
+        "missing_baseline_conditions": missing_baseline_conditions,
+        "methods_worse_than_raw": [
+            {
+                "dataset": row.get("dataset", ""),
+                "source": row.get("source", ""),
+                "motion_bin": row.get("motion_bin", ""),
+                "method": row.get("method", ""),
+                "worse_than_raw_count": row.get("worse_than_raw_count", 0),
+                "condition_count": row.get("condition_count", 0),
+            }
+            for row in worse_than_raw
+        ],
+        "methods_worse_than_persistence": [
+            {
+                "dataset": row.get("dataset", ""),
+                "source": row.get("source", ""),
+                "motion_bin": row.get("motion_bin", ""),
+                "method": row.get("method", ""),
+                "worse_than_persistence_count": row.get("worse_than_persistence_count", 0),
+                "condition_count": row.get("condition_count", 0),
+            }
+            for row in worse_than_persistence
+        ],
+        "best_methods_by_dataset_motion_bin": best_methods,
+    }
+
+
+def _write_paper_summary_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    headers = [
+        "dataset",
+        "motion bin",
+        "method",
+        "conditions",
+        "wins",
+        "tracking (deg)",
+        "delta raw",
+        "delta pers.",
+        "worse raw",
+        "worse pers.",
+    ]
+    keys = [
+        "dataset",
+        "motion_bin",
+        "method",
+        "condition_count",
+        "win_count",
+        "mean_tracking_error_deg",
+        "mean_improvement_vs_raw_deg",
+        "mean_improvement_vs_persistence_deg",
+        "worse_than_raw_count",
+        "worse_than_persistence_count",
+    ]
+    lines = [
+        "# Accuracy leaderboard paper summary",
+        "",
+        "Rows are aggregated by dataset, motion bin, and method across noise and occlusion conditions.",
+        "",
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(_escape_markdown(row.get(key, "")) for key in keys) + " |")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_paper_summary_latex(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    keys = [
+        "dataset",
+        "motion_bin",
+        "method",
+        "condition_count",
+        "win_count",
+        "mean_tracking_error_deg",
+        "mean_improvement_vs_raw_deg",
+        "mean_improvement_vs_persistence_deg",
+    ]
+    headers = [
+        "Dataset",
+        "Motion bin",
+        "Method",
+        "Cond.",
+        "Wins",
+        "Track.",
+        r"$\Delta$ raw",
+        r"$\Delta$ pers.",
+    ]
+    lines = [
+        r"\begin{table}[t]",
+        r"\centering",
+        r"\caption{Paper summary of the accuracy leaderboard, aggregated across noise and occlusion conditions.}",
+        r"\label{tab:accuracy-leaderboard-paper-summary}",
+        r"\begin{tabular}{lllrrrrr}",
+        r"\toprule",
+        " & ".join(headers) + r" \\",
+        r"\midrule",
+    ]
+    for row in rows:
+        lines.append(" & ".join(_escape_latex(row.get(key, "")) for key in keys) + r" \\")
+    lines.extend([r"\bottomrule", r"\end{tabular}", r"\end{table}", ""])
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_sanity_report_markdown(path: Path, report: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Accuracy leaderboard sanity report",
+        "",
+        f"- rows: {report['row_count']}",
+        f"- conditions: {report['condition_count']}",
+        f"- paper summary rows: {report['paper_summary_row_count']}",
+        f"- duplicate context rows: {len(report['duplicate_context_rows'])}",
+        f"- missing baseline conditions: {len(report['missing_baseline_conditions'])}",
+        "",
+        "## Best Methods",
+        "",
+        "| dataset | motion bin | method | tracking (deg) | delta raw | delta pers. | wins | conditions |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in report["best_methods_by_dataset_motion_bin"]:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _escape_markdown(row.get("dataset", "")),
+                    _escape_markdown(row.get("motion_bin", "")),
+                    _escape_markdown(row.get("method", "")),
+                    _escape_markdown(row.get("mean_tracking_error_deg", "")),
+                    _escape_markdown(row.get("mean_improvement_vs_raw_deg", "")),
+                    _escape_markdown(row.get("mean_improvement_vs_persistence_deg", "")),
+                    _escape_markdown(row.get("win_count", "")),
+                    _escape_markdown(row.get("condition_count", "")),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(["", "## Warnings", ""])
+    if report["duplicate_context_rows"]:
+        lines.append("- Duplicate rows exist for at least one dataset/noise/occlusion/method context.")
+    if report["missing_baseline_conditions"]:
+        lines.append("- At least one condition is missing a raw or persistence baseline.")
+    if report["methods_worse_than_raw"]:
+        lines.append("- At least one non-raw method is worse than raw in one or more conditions.")
+    if report["methods_worse_than_persistence"]:
+        lines.append("- At least one non-persistence method is worse than persistence in one or more conditions.")
+    if not any(
+        [
+            report["duplicate_context_rows"],
+            report["missing_baseline_conditions"],
+            report["methods_worse_than_raw"],
+            report["methods_worse_than_persistence"],
+        ]
+    ):
+        lines.append("- No sanity warnings.")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def build_leaderboard(
@@ -610,13 +1012,35 @@ def build_leaderboard(
 def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs = _standard_outputs(output_dir)
+    paper_summary = build_paper_summary(rows)
+    sanity_report = build_sanity_report(rows, paper_summary)
     _write_csv(Path(outputs["csv"]), rows)
     Path(outputs["json"]).write_text(
-        json.dumps({"rows": rows, "row_count": len(rows)}, indent=2),
+        json.dumps(
+            {
+                "rows": rows,
+                "row_count": len(rows),
+                "paper_summary": paper_summary,
+                "sanity_report": sanity_report,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
     _write_markdown(Path(outputs["markdown"]), rows)
     _write_latex(Path(outputs["latex"]), rows)
+    _write_table_csv(Path(outputs["paper_summary_csv"]), paper_summary, PAPER_SUMMARY_COLUMNS)
+    Path(outputs["paper_summary_json"]).write_text(
+        json.dumps({"rows": paper_summary, "row_count": len(paper_summary)}, indent=2),
+        encoding="utf-8",
+    )
+    _write_paper_summary_markdown(Path(outputs["paper_summary_markdown"]), paper_summary)
+    _write_paper_summary_latex(Path(outputs["paper_summary_latex"]), paper_summary)
+    Path(outputs["sanity_report_json"]).write_text(
+        json.dumps(sanity_report, indent=2),
+        encoding="utf-8",
+    )
+    _write_sanity_report_markdown(Path(outputs["sanity_report_markdown"]), sanity_report)
     return outputs
 
 
