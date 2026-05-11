@@ -191,6 +191,12 @@ jobs:
           test -s "$OUTPUT_DIR/accuracy_leaderboard.json"
           test -s "$OUTPUT_DIR/accuracy_leaderboard.md"
           test -s "$OUTPUT_DIR/accuracy_leaderboard.tex"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_paper_summary.csv"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_paper_summary.json"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_paper_summary.md"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_paper_summary.tex"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_sanity_report.json"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_sanity_report.md"
           python - <<'PY'
           import json
           import os
@@ -200,7 +206,10 @@ jobs:
           payload = json.loads((output_dir / "accuracy_leaderboard.json").read_text(encoding="utf-8"))
           if int(payload.get("row_count", 0)) <= 0:
               raise SystemExit("accuracy_leaderboard.json has no rows")
-          print(json.dumps({"row_count": payload["row_count"]}, indent=2))
+          summary = json.loads((output_dir / "accuracy_leaderboard_paper_summary.json").read_text(encoding="utf-8"))
+          if int(summary.get("row_count", 0)) <= 0:
+              raise SystemExit("accuracy_leaderboard_paper_summary.json has no rows")
+          print(json.dumps({"row_count": payload["row_count"], "paper_summary_row_count": summary["row_count"]}, indent=2))
           PY
 
       - name: Upload accuracy leaderboard
