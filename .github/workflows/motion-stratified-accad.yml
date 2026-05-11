@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       runs_on_json:
-        description: JSON array for runs-on. Use a self-hosted label set if the full private dataset is mounted there.
+        description: JSON array for runs-on. Use self-hosted labels for mounted private data.
         required: true
         default: '["ubuntu-latest"]'
       config_path:
@@ -12,7 +12,7 @@ on:
         required: true
         default: configs/private_accad_eval.example.json
       data_root:
-        description: Data root passed to --data-root. Leave empty with download_sample=true to use data/accad_secret_sample on GitHub-hosted runners or $HOME/.cache/datasets/so3-pose-filter/accad-sample on self-hosted runners.
+        description: Data root for --data-root. Required when download_sample=false.
         required: false
         default: ""
       output_dir:
@@ -75,137 +75,49 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Resolve ACCAD sample cache path
-        id: accad-sample-cache-path
-        env:
-          SAMPLE_FILE_COUNT: ${{ inputs.sample_file_count }}
-        run: |
-          set -euo pipefail
-          if [ -z "${DATA_ROOT:-}" ]; then
-            if [ "${{ inputs.download_sample }}" = "true" ]; then
-              if [ "${RUNNER_ENVIRONMENT:-}" = "self-hosted" ]; then
-                DATA_ROOT="${HOME}/.cache/datasets/so3-pose-filter/accad-sample"
-              else
-                DATA_ROOT="data/accad_secret_sample"
-              fi
-            else
-              echo "data_root is required when download_sample=false" >&2
-              exit 2
-            fi
-          elif [ "${DATA_ROOT#\~/}" != "${DATA_ROOT}" ]; then
-            DATA_ROOT="${HOME}/${DATA_ROOT#\~/}"
-          elif [ "${DATA_ROOT#\$HOME/}" != "${DATA_ROOT}" ]; then
-            DATA_ROOT="${HOME}/${DATA_ROOT#\$HOME/}"
-          fi
-
-          mkdir -p "${DATA_ROOT}"
-          sample_count="$(find "${DATA_ROOT}" -maxdepth 1 -type f -name '*.npz' | wc -l | tr -d ' ')"
-          if [ "${sample_count}" -ge "${SAMPLE_FILE_COUNT}" ]; then
-            echo "local-cache-hit=true" >> "$GITHUB_OUTPUT"
-            echo "ACCAD sample cache hit at ${DATA_ROOT} (${sample_count} files)"
-          else
-            echo "local-cache-hit=false" >> "$GITHUB_OUTPUT"
-            echo "ACCAD sample cache miss at ${DATA_ROOT} (${sample_count} files)"
-          fi
-          echo "DATA_ROOT=${DATA_ROOT}" >> "$GITHUB_ENV"
-          echo "data_root=${DATA_ROOT}"
-
-      - name: Restore ACCAD sample cache
-        id: accad-sample-cache
-        if: ${{ (inputs.download_sample == true || inputs.download_sample == 'true') && runner.environment != 'self-hosted' }}
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ inputs.data_root || 'data/accad_secret_sample' }}
-          key: so3-pose-filter-accad-sample-${{ runner.os }}-files${{ inputs.sample_file_count }}-v1
-
-      - name: Install rclone without sudo
-        if: ${{ (inputs.download_sample == true || inputs.download_sample == 'true') && steps.accad-sample-cache-path.outputs.local-cache-hit != 'true' && (runner.environment == 'self-hosted' || steps.accad-sample-cache.outputs.cache-hit != 'true') }}
-        run: |
-          set -euo pipefail
-          if command -v rclone >/dev/null 2>&1 && rclone version >/dev/null 2>&1; then
-            rclone version
-            exit 0
-          fi
-          mkdir -p "$RUNNER_TEMP/rclone-bin" "$RUNNER_TEMP/rclone-download/extract"
-          curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
-            -o "$RUNNER_TEMP/rclone-download/rclone.zip"
-          python -m zipfile -e \
-            "$RUNNER_TEMP/rclone-download/rclone.zip" \
-            "$RUNNER_TEMP/rclone-download/extract"
-          RCLONE_BIN="$(find "$RUNNER_TEMP/rclone-download/extract" -type f -name rclone | head -n 1)"
-          if [ -z "$RCLONE_BIN" ]; then
-            echo "Downloaded rclone archive did not contain rclone binary" >&2
-            exit 1
-          fi
-          cp "$RCLONE_BIN" "$RUNNER_TEMP/rclone-bin/rclone"
-          chmod 755 "$RUNNER_TEMP/rclone-bin/rclone"
-          echo "$RUNNER_TEMP/rclone-bin" >> "$GITHUB_PATH"
-          export PATH="$RUNNER_TEMP/rclone-bin:$PATH"
-          rclone version
-
       - name: Install package, Torch extras, and PyRecEst main
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[torch]"
           python -m pip install --upgrade "git+https://github.com/FlorianPfaff/PyRecEst.git@main"
 
-      - name: Download ACCAD AMASS sample
-        if: ${{ (inputs.download_sample == true || inputs.download_sample == 'true') && steps.accad-sample-cache-path.outputs.local-cache-hit != 'true' && (runner.environment == 'self-hosted' || steps.accad-sample-cache.outputs.cache-hit != 'true') }}
+      - name: Resolve provided ACCAD data root
+        if: ${{ inputs.download_sample != true && inputs.download_sample != 'true' }}
         run: |
-          mkdir -p "$DATA_ROOT" runs
-          python scripts/download_webdav_amass_sample.py \
-            --output-dir "$DATA_ROOT" \
-            --report runs/motion_stratified_download_report.json \
-            --max-files "${{ inputs.sample_file_count }}" \
-            --webdav-url-env ACCAD_DATA_WEBDAV_URL \
-            --key-env ACCAD_DATA_KEY \
-            --password-env ACCAD_DATA_PASSWORD \
-            --source-name ACCAD_DATA_WEBDAV_URL
+          set -euo pipefail
+          if [ -z "${DATA_ROOT:-}" ]; then
+            echo "data_root is required when download_sample=false" >&2
+            exit 2
+          fi
+          if [[ "${DATA_ROOT}" == ~/* ]]; then
+            DATA_ROOT="${HOME}/${DATA_ROOT#~/}"
+          elif [[ "${DATA_ROOT}" == \$HOME/* ]]; then
+            DATA_ROOT="${HOME}/${DATA_ROOT#\$HOME/}"
+          fi
+          echo "DATA_ROOT=${DATA_ROOT}" >> "$GITHUB_ENV"
 
-      - name: Write ACCAD sample cache report
-        if: ${{ (inputs.download_sample == true || inputs.download_sample == 'true') && (steps.accad-sample-cache-path.outputs.local-cache-hit == 'true' || steps.accad-sample-cache.outputs.cache-hit == 'true') }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import sys
-          from pathlib import Path
-
-          sys.path.insert(0, "scripts")
-          from download_amass_sample import is_amass_npz
-
-          data_dir = Path(os.environ["DATA_ROOT"])
-          files = sorted(data_dir.glob("*.npz"))
-          if not files:
-              raise SystemExit(f"ACCAD sample cache hit but no .npz files were found in {data_dir}")
-
-          records = []
-          for path in files:
-              ok, metadata = is_amass_npz(path)
-              if not ok:
-                  raise SystemExit(f"Cached ACCAD sample is not a valid AMASS .npz: {path}; metadata={metadata}")
-              records.append({"sample_path": str(path), "metadata": metadata})
-
-          report = {
-              "source": "ACCAD_DATA_WEBDAV_URL",
-              "cache_hit": True,
-              "selected_count": len(records),
-              "files": records,
-              "errors": [],
-          }
-          report_path = Path("runs/motion_stratified_download_report.json")
-          report_path.parent.mkdir(parents=True, exist_ok=True)
-          report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-          print(json.dumps(report, indent=2))
-          PY
-
-      - name: Save ACCAD sample cache
-        if: ${{ (inputs.download_sample == true || inputs.download_sample == 'true') && runner.environment != 'self-hosted' && steps.accad-sample-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
-        continue-on-error: true
+      - name: Ensure ACCAD AMASS sample
+        id: accad-sample
+        if: ${{ inputs.download_sample == true || inputs.download_sample == 'true' }}
+        uses: ./.github/actions/ensure-amass-webdav-sample
         with:
-          path: ${{ inputs.data_root || 'data/accad_secret_sample' }}
-          key: ${{ steps.accad-sample-cache.outputs.cache-primary-key }}
+          label: ACCAD
+          slug: accad
+          data-root: data/accad_secret_sample
+          report-path: runs/motion_stratified_download_report.json
+          manifest-path: runs/motion_stratified_cache_manifest.txt
+          max-files: ${{ inputs.sample_file_count }}
+          cache-key: so3-pose-filter-accad-sample-${{ runner.os }}-files${{ inputs.sample_file_count }}-v1
+          cache-version: v1
+          source-name: ACCAD_DATA_WEBDAV_URL
+          webdav-url-env: ACCAD_DATA_WEBDAV_URL
+          key-env: ACCAD_DATA_KEY
+          password-env: ACCAD_DATA_PASSWORD
+
+      - name: Register ACCAD sample data root
+        if: ${{ inputs.download_sample == true || inputs.download_sample == 'true' }}
+        run: |
+          echo "DATA_ROOT=${{ steps.accad-sample.outputs.data-root }}" >> "$GITHUB_ENV"
 
       - name: Run motion-stratified private ACCAD evaluation
         run: |
@@ -239,20 +151,16 @@ jobs:
           ]
           for path in required:
               assert path.exists(), f"missing required artifact: {path}"
-
           summary = json.loads(required[0].read_text(encoding="utf-8"))
           assert summary["motion_bin_counts"], "no motion bins were produced"
           assert summary["method_means_by_motion_bin"], "no method means were produced"
-
           with required[4].open(newline="", encoding="utf-8") as handle:
               rows = list(csv.DictReader(handle))
           assert rows, "aggregate_method_means_by_motion_bin.csv is empty"
-          methods = sorted({row["method"] for row in rows})
-          bins = sorted({row["motion_bin"] for row in rows})
           validation = {
               "output_dir": str(output_dir),
-              "motion_bins": bins,
-              "methods": methods,
+              "motion_bins": sorted({row["motion_bin"] for row in rows}),
+              "methods": sorted({row["method"] for row in rows}),
               "row_count": len(rows),
           }
           (output_dir / "motion_stratified_validation.json").write_text(
@@ -277,6 +185,7 @@ jobs:
           retention-days: ${{ inputs.artifact_retention_days }}
           path: |
             runs/motion_stratified_download_report.json
+            runs/motion_stratified_cache_manifest.txt
             ${{ inputs.output_dir }}/run_manifest.json
             ${{ inputs.output_dir }}/motion_stratified_validation.json
             ${{ inputs.output_dir }}/motion_bin_segment_diagnostics.json
