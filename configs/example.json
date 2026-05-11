@@ -23,6 +23,8 @@
   "min_confidence": 0.35,
   "smoother_ema_alpha": 0.35,
   "smoother_chordal_window": 5,
+  "savgol_tangent_window": 7,
+  "savgol_tangent_degree": 2,
   "factorized_update": true,
   "resample_threshold": 0.5,
   "ablation_particle_counts": [64, 128, 256],

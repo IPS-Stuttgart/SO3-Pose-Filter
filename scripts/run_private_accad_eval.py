@@ -12,13 +12,17 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from pose_filter.evaluation import write_csv, write_json  # noqa: E402
 from prepare_amass_windows import prepare_windows  # noqa: E402
 from run_first_results_benchmark import run_first_results_benchmark  # noqa: E402
+
+from pose_filter.evaluation import write_csv, write_json  # noqa: E402
 
 DEFAULT_METHODS = (
     "raw",
     "persistence",
+    "smoother_ema",
+    "smoother_chordal",
+    "savgol_tangent",
     "deterministic_persistence_pf",
     "noisy_persistence_pf",
     "constant_velocity",
@@ -77,18 +81,9 @@ def _aggregate_method_means(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out.append(
             {
                 "method": method,
-                "mean_tracking_error_deg": _mean(
-                    [float(row["tracking_error_deg"]) for row in method_rows]
-                ),
-                "mean_improvement_vs_raw_deg": _mean(
-                    [float(row["improvement_vs_raw_deg"]) for row in method_rows]
-                ),
-                "mean_improvement_vs_persistence_deg": _mean(
-                    [
-                        float(row["improvement_vs_persistence_deg"])
-                        for row in method_rows
-                    ]
-                ),
+                "mean_tracking_error_deg": _mean([float(row["tracking_error_deg"]) for row in method_rows]),
+                "mean_improvement_vs_raw_deg": _mean([float(row["improvement_vs_raw_deg"]) for row in method_rows]),
+                "mean_improvement_vs_persistence_deg": _mean([float(row["improvement_vs_persistence_deg"]) for row in method_rows]),
                 "row_count": len(method_rows),
             }
         )
@@ -159,11 +154,7 @@ def _write_markdown_summary(
         "| --- | ---: | ---: | ---: | ---: |",
     ]
     for row in method_means:
-        lines.append(
-            "| {method} | {mean_tracking_error_deg:.4g} | {mean_improvement_vs_raw_deg:.4g} | {mean_improvement_vs_persistence_deg:.4g} | {row_count} |".format(
-                **row
-            )
-        )
+        lines.append("| {method} | {mean_tracking_error_deg:.4g} | {mean_improvement_vs_raw_deg:.4g} | {mean_improvement_vs_persistence_deg:.4g} | {row_count} |".format(**row))
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -177,11 +168,7 @@ def run_private_accad_eval(
 ) -> dict[str, Any]:
     """Run a private full-ACCAD evaluation into ignored local output folders."""
 
-    root = _as_path(
-        source_data_root
-        or config.get("source_data_root")
-        or config.get("data_root", "D:/Uni-Data/ACCAD")
-    )
+    root = _as_path(source_data_root or config.get("source_data_root") or config.get("data_root", "D:/Uni-Data/ACCAD"))
     out_dir = _as_path(output_dir or config.get("output_dir", "runs/private_accad_eval"))
     segments_dir = _as_path(config.get("segments_dir", out_dir / "segments"))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -197,21 +184,11 @@ def run_private_accad_eval(
             num_joints=int(config.get("num_joints", 23)),
             segment_frames=int(config.get("segment_frames", 80)),
             stride_frames=int(config.get("stride_frames", 40)),
-            max_files=(
-                None
-                if config.get("max_files") is None
-                else int(config["max_files"])
-            ),
+            max_files=(None if config.get("max_files") is None else int(config["max_files"])),
             max_segments=int(config.get("max_segments", 48)),
             selection=str(config.get("selection", "top-motion")),
-            min_motion_deg_per_frame=float(
-                config.get("min_motion_deg_per_frame", 0.0)
-            ),
-            max_per_file=(
-                None
-                if config.get("max_per_file") is None
-                else int(config["max_per_file"])
-            ),
+            min_motion_deg_per_frame=float(config.get("min_motion_deg_per_frame", 0.0)),
+            max_per_file=(None if config.get("max_per_file") is None else int(config["max_per_file"])),
             clean=not bool(config.get("keep_existing_segments", False)),
         )
     else:
@@ -222,10 +199,7 @@ def run_private_accad_eval(
             "prepared": False,
         }
 
-    methods = tuple(
-        str(method)
-        for method in config.get("benchmark_methods", list(DEFAULT_METHODS))
-    )
+    methods = tuple(str(method) for method in config.get("benchmark_methods", list(DEFAULT_METHODS)))
     seeds = _int_list(config.get("benchmark_seeds"), [int(config.get("seed", 19))])
     particle_counts = _int_list(
         config.get("benchmark_num_particles"),
@@ -266,9 +240,7 @@ def run_private_accad_eval(
                 "num_particles": num_particles,
                 "output_dir": str(run_dir),
                 "best_method": benchmark_summary["best_method"],
-                "best_tracking_error_deg": benchmark_summary[
-                    "best_tracking_error_deg"
-                ],
+                "best_tracking_error_deg": benchmark_summary["best_tracking_error_deg"],
             }
             run_summaries.append(run)
             for row in _read_csv(run_dir / "benchmark_metrics.csv"):
@@ -286,9 +258,7 @@ def run_private_accad_eval(
     write_csv(method_means_path, method_means)
 
     best_row = min(method_means, key=lambda row: row["mean_tracking_error_deg"])
-    means_by_method = {
-        row["method"]: float(row["mean_tracking_error_deg"]) for row in method_means
-    }
+    means_by_method = {row["method"]: float(row["mean_tracking_error_deg"]) for row in method_means}
     summary = {
         "source_data_root": str(root),
         "output_dir": str(out_dir),
@@ -303,26 +273,11 @@ def run_private_accad_eval(
         "method_means": method_means,
         "best_method": best_row["method"],
         "best_tracking_error_deg": best_row["mean_tracking_error_deg"],
-        "constant_velocity_beats_persistence": (
-            means_by_method.get("constant_velocity", float("inf"))
-            < means_by_method.get("persistence", float("-inf"))
-        ),
-        "constant_velocity_beats_gaussian_rw": (
-            means_by_method.get("constant_velocity", float("inf"))
-            < means_by_method.get("gaussian_rw", float("-inf"))
-        ),
-        "history_mlp_beats_gaussian_rw": (
-            means_by_method.get("history_mlp_delta", float("inf"))
-            < means_by_method.get("gaussian_rw", float("-inf"))
-        ),
-        "gru_beats_gaussian_rw": (
-            means_by_method.get("gru_delta", float("inf"))
-            < means_by_method.get("gaussian_rw", float("-inf"))
-        ),
-        "mlp_beats_gaussian_rw": (
-            means_by_method.get("mlp_delta", float("inf"))
-            < means_by_method.get("gaussian_rw", float("-inf"))
-        ),
+        "constant_velocity_beats_persistence": (means_by_method.get("constant_velocity", float("inf")) < means_by_method.get("persistence", float("-inf"))),
+        "constant_velocity_beats_gaussian_rw": (means_by_method.get("constant_velocity", float("inf")) < means_by_method.get("gaussian_rw", float("-inf"))),
+        "history_mlp_beats_gaussian_rw": (means_by_method.get("history_mlp_delta", float("inf")) < means_by_method.get("gaussian_rw", float("-inf"))),
+        "gru_beats_gaussian_rw": (means_by_method.get("gru_delta", float("inf")) < means_by_method.get("gaussian_rw", float("-inf"))),
+        "mlp_beats_gaussian_rw": (means_by_method.get("mlp_delta", float("inf")) < means_by_method.get("gaussian_rw", float("-inf"))),
         "outputs": {
             "aggregate_benchmark_metrics": str(aggregate_metrics_path),
             "aggregate_transition_metrics": str(aggregate_transition_path),
@@ -340,9 +295,7 @@ def run_private_accad_eval(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run a private ACCAD evaluation into ignored local output folders."
-    )
+    parser = argparse.ArgumentParser(description="Run a private ACCAD evaluation into ignored local output folders.")
     parser.add_argument("--config", required=True, help="Path to JSON config.")
     parser.add_argument(
         "--data-root",

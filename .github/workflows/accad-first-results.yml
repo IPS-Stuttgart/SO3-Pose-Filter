@@ -158,13 +158,18 @@ jobs:
           assert benchmark_summary["methods"] == [
               "raw",
               "persistence",
+              "smoother_ema",
+              "smoother_chordal",
+              "savgol_tangent",
               "gaussian_rw",
               "pyrecest_pf",
               "mlp_delta",
               "pyrecest_mlp_pf",
               "history_mlp_delta",
           ]
-          assert benchmark_summary["row_count"] == 28
+          assert benchmark_summary["row_count"] == 40
+          for smoother in ["smoother_ema", "smoother_chordal", "savgol_tangent"]:
+              assert smoother in benchmark_summary["means_by_method"]
           assert benchmark_summary["acceptance"]["target_method"] == "pyrecest_pf"
           assert benchmark_summary["acceptance"]["target_beats_raw_any"]
 
