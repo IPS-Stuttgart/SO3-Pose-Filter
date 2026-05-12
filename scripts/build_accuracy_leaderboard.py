@@ -394,6 +394,8 @@ def _standard_outputs(output_dir: Path) -> dict[str, str]:
         "comparison_report_csv": str(output_dir / "accuracy_leaderboard_method_comparisons.csv"),
         "comparison_report_json": str(output_dir / "accuracy_leaderboard_comparison_report.json"),
         "comparison_report_markdown": str(output_dir / "accuracy_leaderboard_comparison_report.md"),
+        "claim_candidates_json": str(output_dir / "accuracy_leaderboard_claim_candidates.json"),
+        "claim_candidates_markdown": str(output_dir / "accuracy_leaderboard_claim_candidates.md"),
     }
 
 
@@ -990,6 +992,96 @@ def build_class_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return comparison_rows
 
 
+def _evidence_label(row: dict[str, Any]) -> str:
+    condition_count = int(row.get("condition_count", 0))
+    mean_improvement = _float_or_nan(row.get("mean_improvement_deg"))
+    ci_low = _float_or_nan(row.get("ci95_low_deg"))
+    win_rate = _float_or_nan(row.get("win_rate"))
+    win_count = int(row.get("win_count", 0))
+    loss_count = int(row.get("loss_count", 0))
+    if condition_count < 2:
+        return "insufficient"
+    if math.isfinite(ci_low) and ci_low > 0.0 and win_rate >= 0.75:
+        return "strong_positive"
+    if math.isfinite(mean_improvement) and mean_improvement > 0.0 and win_count > loss_count:
+        return "positive"
+    if math.isfinite(mean_improvement) and mean_improvement > 0.0:
+        return "mixed_positive"
+    if loss_count > win_count:
+        return "negative"
+    return "mixed"
+
+
+def _claim_sentence(row: dict[str, Any], evidence: str) -> str:
+    target = str(row.get("target_class", "")).replace("_", " ")
+    baseline = str(row.get("baseline_class", "")).replace("_", " ")
+    condition_count = row.get("condition_count", "")
+    mean_improvement = _format_float(row.get("mean_improvement_deg"))
+    ci_low = _format_float(row.get("ci95_low_deg"))
+    ci_high = _format_float(row.get("ci95_high_deg"))
+    win_rate = _format_float(row.get("win_rate"))
+    target_methods = str(row.get("target_best_methods", ""))
+    baseline_methods = str(row.get("baseline_best_methods", ""))
+    return (
+        f"{target} versus {baseline}: {evidence}; mean paired improvement "
+        f"{mean_improvement} deg over {condition_count} matched conditions "
+        f"(win rate {win_rate}, 95% CI [{ci_low}, {ci_high}]). "
+        f"Target best methods: {target_methods or 'n/a'}. "
+        f"Baseline best methods: {baseline_methods or 'n/a'}."
+    )
+
+
+def build_claim_candidates(class_comparisons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    relevant_baselines = {"raw_measurement", "causal_baseline", "offline_smoother"}
+    candidates = []
+    for row in class_comparisons:
+        if row.get("target_class") != "causal_online_filter":
+            continue
+        if row.get("baseline_class") not in relevant_baselines:
+            continue
+        evidence = _evidence_label(row)
+        candidates.append(
+            {
+                "dataset": row.get("dataset", ""),
+                "source": row.get("source", ""),
+                "motion_bin": row.get("motion_bin", ""),
+                "target_class": row.get("target_class", ""),
+                "baseline_class": row.get("baseline_class", ""),
+                "evidence": evidence,
+                "condition_count": row.get("condition_count", ""),
+                "mean_improvement_deg": row.get("mean_improvement_deg", ""),
+                "median_improvement_deg": row.get("median_improvement_deg", ""),
+                "ci95_low_deg": row.get("ci95_low_deg", ""),
+                "ci95_high_deg": row.get("ci95_high_deg", ""),
+                "win_count": row.get("win_count", ""),
+                "loss_count": row.get("loss_count", ""),
+                "tie_count": row.get("tie_count", ""),
+                "win_rate": row.get("win_rate", ""),
+                "target_best_methods": row.get("target_best_methods", ""),
+                "baseline_best_methods": row.get("baseline_best_methods", ""),
+                "claim_sentence": _claim_sentence(row, evidence),
+            }
+        )
+    evidence_order = {
+        "strong_positive": 0,
+        "positive": 1,
+        "mixed_positive": 2,
+        "mixed": 3,
+        "insufficient": 4,
+        "negative": 5,
+    }
+    return sorted(
+        candidates,
+        key=lambda row: (
+            str(row.get("dataset", "")),
+            str(row.get("source", "")),
+            str(row.get("motion_bin", "")),
+            evidence_order.get(str(row.get("evidence", "")), 99),
+            str(row.get("baseline_class", "")),
+        ),
+    )
+
+
 def build_paper_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     condition_groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     paper_groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -1360,6 +1452,38 @@ def _write_comparison_report_markdown(
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _write_claim_candidates_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Accuracy leaderboard claim candidates",
+        "",
+        "These are paper-facing claim checks derived from paired class comparisons. They are not SOTA claims; they summarize whether the current evidence supports a cautious within-benchmark statement.",
+        "",
+        "| dataset | motion bin | baseline class | evidence | mean improvement | 95% CI | wins | losses | claim sentence |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _escape_markdown(row.get("dataset", "")),
+                    _escape_markdown(row.get("motion_bin", "")),
+                    _escape_markdown(row.get("baseline_class", "")),
+                    _escape_markdown(row.get("evidence", "")),
+                    _escape_markdown(row.get("mean_improvement_deg", "")),
+                    f"[{_escape_markdown(row.get('ci95_low_deg', ''))}, {_escape_markdown(row.get('ci95_high_deg', ''))}]",
+                    _escape_markdown(row.get("win_count", "")),
+                    _escape_markdown(row.get("loss_count", "")),
+                    _escape_markdown(row.get("claim_sentence", "")),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def build_leaderboard(
     *,
     detector_runs: list[DetectorRunSpec],
@@ -1383,6 +1507,7 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
     sanity_report = build_sanity_report(rows, paper_summary)
     method_comparisons = build_method_comparisons(rows)
     class_comparisons = build_class_comparisons(rows)
+    claim_candidates = build_claim_candidates(class_comparisons)
     _write_csv(Path(outputs["csv"]), rows)
     Path(outputs["json"]).write_text(
         json.dumps(
@@ -1393,6 +1518,7 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
                 "sanity_report": sanity_report,
                 "method_comparisons": method_comparisons,
                 "class_comparisons": class_comparisons,
+                "claim_candidates": claim_candidates,
             },
             indent=2,
         ),
@@ -1430,6 +1556,11 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
         method_comparisons=method_comparisons,
         class_comparisons=class_comparisons,
     )
+    Path(outputs["claim_candidates_json"]).write_text(
+        json.dumps({"rows": claim_candidates, "row_count": len(claim_candidates)}, indent=2),
+        encoding="utf-8",
+    )
+    _write_claim_candidates_markdown(Path(outputs["claim_candidates_markdown"]), claim_candidates)
     return outputs
 
 

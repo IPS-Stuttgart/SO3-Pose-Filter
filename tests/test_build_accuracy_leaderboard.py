@@ -105,6 +105,8 @@ class AccuracyLeaderboardTest(unittest.TestCase):
                 "comparison_report_csv",
                 "comparison_report_json",
                 "comparison_report_markdown",
+                "claim_candidates_json",
+                "claim_candidates_markdown",
             ]:
                 self.assertTrue(Path(outputs[key]).is_file(), key)
 
@@ -130,6 +132,14 @@ class AccuracyLeaderboardTest(unittest.TestCase):
             causal_vs_offline = next(row for row in report["class_comparisons"] if row["target_class"] == "causal_online_filter" and row["baseline_class"] == "offline_smoother")
             self.assertEqual(causal_vs_offline["condition_count"], 2)
             self.assertEqual(causal_vs_offline["win_count"], 1)
+
+            claims = json.loads(Path(outputs["claim_candidates_json"]).read_text(encoding="utf-8"))
+            self.assertGreaterEqual(claims["row_count"], 3)
+            raw_claim = next(row for row in claims["rows"] if row["target_class"] == "causal_online_filter" and row["baseline_class"] == "raw_measurement")
+            self.assertEqual(raw_claim["evidence"], "strong_positive")
+            self.assertIn("causal online filter versus raw measurement", raw_claim["claim_sentence"])
+            offline_claim = next(row for row in claims["rows"] if row["target_class"] == "causal_online_filter" and row["baseline_class"] == "offline_smoother")
+            self.assertEqual(offline_claim["evidence"], "mixed")
 
 
 if __name__ == "__main__":
