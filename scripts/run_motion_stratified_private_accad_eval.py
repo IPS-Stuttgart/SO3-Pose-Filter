@@ -30,6 +30,7 @@ DEFAULT_METHODS = (
     "noisy_persistence_pf",
     "constant_velocity",
     "gaussian_rw",
+    "adaptive_gaussian_rw",
     "mlp_delta",
     "history_mlp_delta",
     "gru_delta",
@@ -110,7 +111,9 @@ def _motion_bin_bounds(name: str) -> tuple[float, float]:
     raise ValueError(f"unknown motion bin: {name}")
 
 
-def _group_windows_by_motion_bin(window_report: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def _group_windows_by_motion_bin(
+    window_report: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {name: [] for name, _, _ in MOTION_BINS}
     for row in window_report.get("selected", []):
         bin_name = _motion_bin(float(row["motion_deg_per_frame"]))
@@ -299,9 +302,9 @@ def _robustness_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "motion_bin": motion_bin,
                 "method": method,
-                "best_tracking_error_deg": float(np.min(finite)) if finite.size else float("nan"),
-                "median_tracking_error_deg": float(np.median(finite)) if finite.size else float("nan"),
-                "worst_tracking_error_deg": float(np.max(finite)) if finite.size else float("nan"),
+                "best_tracking_error_deg": (float(np.min(finite)) if finite.size else float("nan")),
+                "median_tracking_error_deg": (float(np.median(finite)) if finite.size else float("nan")),
+                "worst_tracking_error_deg": (float(np.max(finite)) if finite.size else float("nan")),
                 "mean_tracking_error_deg": _mean(values),
                 "grid_point_count": len(values),
             }
@@ -369,8 +372,8 @@ def _transition_tracking_diagnostics(
                 "transition_model": transition_model,
                 "mean_tracking_error_deg": row["mean_tracking_error_deg"],
                 "sem_tracking_error_deg": row["sem_tracking_error_deg"],
-                "mean_one_step_error_deg": one_step["mean_value"] if one_step else float("nan"),
-                "mean_rollout_error_deg": rollout["mean_value"] if rollout else float("nan"),
+                "mean_one_step_error_deg": (one_step["mean_value"] if one_step else float("nan")),
+                "mean_rollout_error_deg": (rollout["mean_value"] if rollout else float("nan")),
                 "tracking_row_count": row["row_count"],
                 "transition_row_count": max(
                     int(one_step["row_count"]) if one_step else 0,

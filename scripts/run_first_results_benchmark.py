@@ -35,6 +35,7 @@ METHODS = (
     "noisy_persistence_pf",
     "constant_velocity",
     "gaussian_rw",
+    "adaptive_gaussian_rw",
     "pyrecest_pf",
     "mlp_delta",
     "pyrecest_mlp_pf",
@@ -161,7 +162,7 @@ def _acceptance(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str,
                 else (
                     "history_mlp_delta"
                     if any(row["method"] == "history_mlp_delta" for row in rows)
-                    else "pyrecest_mlp_pf" if any(row["method"] == "pyrecest_mlp_pf" for row in rows) else "pyrecest_pf"
+                    else ("pyrecest_mlp_pf" if any(row["method"] == "pyrecest_mlp_pf" for row in rows) else "pyrecest_pf")
                 )
             ),
         )
@@ -169,8 +170,8 @@ def _acceptance(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str,
     target = representative_by_method.get(target_method)
     return {
         "target_method": target_method,
-        "representative_noise_deg": representative[0]["noise_deg"] if representative else None,
-        "representative_occlusion_prob": representative[0]["occlusion_prob"] if representative else None,
+        "representative_noise_deg": (representative[0]["noise_deg"] if representative else None),
+        "representative_occlusion_prob": (representative[0]["occlusion_prob"] if representative else None),
         "target_beats_raw_at_representative": (bool(target["improvement_vs_raw_deg"] > 0.0) if target is not None else None),
         "target_beats_persistence_at_representative": (bool(target["improvement_vs_persistence_deg"] > 0.0) if target is not None else None),
         "target_beats_raw_any": any(row["method"] == target_method and float(row["improvement_vs_raw_deg"]) > 0.0 for row in rows),
@@ -201,7 +202,11 @@ def _write_plots(
                     else (
                         "history_mlp_delta"
                         if "history_mlp_delta" in methods
-                        else "constant_velocity" if "constant_velocity" in methods else "pyrecest_pf" if "pyrecest_pf" in methods else "gaussian_rw"
+                        else (
+                            "adaptive_gaussian_rw"
+                            if "adaptive_gaussian_rw" in methods
+                            else ("constant_velocity" if "constant_velocity" in methods else ("pyrecest_pf" if "pyrecest_pf" in methods else "gaussian_rw"))
+                        )
                     )
                 )
             ),
@@ -410,6 +415,31 @@ def run_first_results_benchmark(
             smoother_config=smoother_config,
         )
         constant_velocity_rows_by_key = {_grid_key(row): row for row in constant_velocity_rows}
+    adaptive_gaussian_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
+    needs_adaptive_gaussian = "adaptive_gaussian_rw" in methods
+    if needs_adaptive_gaussian:
+        adaptive_gaussian_model = build_transition_model(
+            "adaptive_gaussian_rw",
+            train,
+            process_noise_deg=config.get("process_noise_deg"),
+            config=config,
+        )
+        adaptive_gaussian_rows = robustness_rows(
+            test,
+            adaptive_gaussian_model,
+            noise_grid,
+            occlusion_grid,
+            num_particles,
+            seed,
+            proposal_gain=proposal_gain,
+            confidence_noise_std=confidence_noise_std,
+            min_confidence=min_confidence,
+            factorized_update=factorized_update,
+            resample_threshold=resample_threshold,
+            filter_backend="numpy",
+            smoother_config=smoother_config,
+        )
+        adaptive_gaussian_rows_by_key = {_grid_key(row): row for row in adaptive_gaussian_rows}
     pyrecest_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
     if "pyrecest_pf" in methods:
         pyrecest_rows = robustness_rows(
@@ -611,6 +641,18 @@ def run_first_results_benchmark(
                     num_particles,
                 )
             )
+        if "adaptive_gaussian_rw" in methods:
+            rows.append(
+                _method_row(
+                    "adaptive_gaussian_rw",
+                    adaptive_gaussian_rows_by_key[key],
+                    base_row,
+                    "filter_error_deg",
+                    "adaptive_gaussian_rw",
+                    "numpy",
+                    num_particles,
+                )
+            )
         if "pyrecest_pf" in methods:
             rows.append(
                 _method_row(
@@ -703,6 +745,15 @@ def run_first_results_benchmark(
             transition_metric_rows(
                 "constant_velocity",
                 constant_velocity_model,
+                test,
+                rollout_horizon=int(config.get("rollout_horizon", 10)),
+            )
+        )
+    if needs_adaptive_gaussian:
+        transition_rows.extend(
+            transition_metric_rows(
+                "adaptive_gaussian_rw",
+                adaptive_gaussian_model,
                 test,
                 rollout_horizon=int(config.get("rollout_horizon", 10)),
             )

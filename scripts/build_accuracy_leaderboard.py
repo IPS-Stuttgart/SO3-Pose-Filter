@@ -115,7 +115,12 @@ PAPER_SUMMARY_COLUMNS = [
 RAW_METHODS = {"raw", "raw_measurement"}
 PERSISTENCE_METHODS = {"persistence", "deterministic_persistence_pf"}
 OFFLINE_SMOOTHER_METHODS = {"smoother_ema", "smoother_chordal", "savgol_tangent"}
-CANONICAL_COMPARISON_BASELINES = ["raw", "raw_measurement", "persistence", "savgol_tangent"]
+CANONICAL_COMPARISON_BASELINES = [
+    "raw",
+    "raw_measurement",
+    "persistence",
+    "savgol_tangent",
+]
 
 METHOD_COMPARISON_COLUMNS = [
     "dataset",
@@ -461,7 +466,7 @@ def _method_baseline_rows(
                 "raw_measurement_error_deg": raw_error,
                 "persistence_error_deg": persistence_error,
                 "improvement_vs_raw_deg": 0.0,
-                "improvement_vs_persistence_deg": persistence_error - raw_error if math.isfinite(persistence_error) else float("nan"),
+                "improvement_vs_persistence_deg": (persistence_error - raw_error if math.isfinite(persistence_error) else float("nan")),
                 "mean_ess": float("nan"),
                 "collapse_fraction": float("nan"),
                 "row_count": row_count,
@@ -485,7 +490,7 @@ def _method_baseline_rows(
                 "reappeared_error_deg": float("nan"),
                 "raw_measurement_error_deg": raw_error,
                 "persistence_error_deg": persistence_error,
-                "improvement_vs_raw_deg": raw_error - persistence_error if math.isfinite(raw_error) else float("nan"),
+                "improvement_vs_raw_deg": (raw_error - persistence_error if math.isfinite(raw_error) else float("nan")),
                 "improvement_vs_persistence_deg": 0.0,
                 "mean_ess": float("nan"),
                 "collapse_fraction": float("nan"),
@@ -538,7 +543,7 @@ def _detector_row(
         "reappeared_error_deg": float("nan"),
         "raw_measurement_error_deg": raw,
         "persistence_error_deg": persistence,
-        "improvement_vs_raw_deg": raw - tracking if math.isfinite(raw) else raw_joint - tracking,
+        "improvement_vs_raw_deg": (raw - tracking if math.isfinite(raw) else raw_joint - tracking),
         "improvement_vs_persistence_deg": persistence - tracking,
         "mean_ess": _float_or_nan(means.get("mean_ess")),
         "collapse_fraction": float("nan"),
@@ -554,7 +559,10 @@ def load_detector_run(spec: DetectorRunSpec, default_dataset: str) -> list[dict[
     means = dict(summary.get("means", {}))
     if metrics_rows:
         row_means = _summarize_detector_rows(metrics_rows)
-        means = {**row_means, **{key: value for key, value in means.items() if _is_finite(value)}}
+        means = {
+            **row_means,
+            **{key: value for key, value in means.items() if _is_finite(value)},
+        }
         summary = {**summary, "row_count": summary.get("row_count", len(metrics_rows))}
         if "transition_model" not in summary and metrics_rows:
             summary["transition_model"] = metrics_rows[0].get("transition_model", "")
@@ -726,9 +734,9 @@ def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(row.get("dataset", "")),
             str(row.get("source", "")),
             str(row.get("motion_bin", "")),
-            _float_or_nan(row.get("noise_deg")) if math.isfinite(_float_or_nan(row.get("noise_deg"))) else -1.0,
-            _float_or_nan(row.get("occlusion_prob")) if math.isfinite(_float_or_nan(row.get("occlusion_prob"))) else -1.0,
-            _float_or_nan(row.get("tracking_error_deg")) if math.isfinite(_float_or_nan(row.get("tracking_error_deg"))) else float("inf"),
+            (_float_or_nan(row.get("noise_deg")) if math.isfinite(_float_or_nan(row.get("noise_deg"))) else -1.0),
+            (_float_or_nan(row.get("occlusion_prob")) if math.isfinite(_float_or_nan(row.get("occlusion_prob"))) else -1.0),
+            (_float_or_nan(row.get("tracking_error_deg")) if math.isfinite(_float_or_nan(row.get("tracking_error_deg"))) else float("inf")),
             str(row.get("method", "")),
         ),
     )
@@ -836,7 +844,15 @@ def _method_class(row: dict[str, Any] | None) -> str:
         return "offline_smoother"
     if backend in {"numpy", "pyrecest"}:
         return "causal_online_filter"
-    if method in {"gaussian_rw", "constant_velocity", "mlp_delta", "history_mlp_delta", "gru_delta", "learned_proposal"}:
+    if method in {
+        "gaussian_rw",
+        "adaptive_gaussian_rw",
+        "constant_velocity",
+        "mlp_delta",
+        "history_mlp_delta",
+        "gru_delta",
+        "learned_proposal",
+    }:
         return "causal_online_filter"
     return "other"
 
@@ -849,7 +865,9 @@ def _context_key(row: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def _condition_method_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str, str, str], dict[str, dict[str, Any]]]:
+def _condition_method_lookup(
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str, str, str, str], dict[str, dict[str, Any]]]:
     out: dict[tuple[str, str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in rows:
         method = str(row.get("method", ""))
@@ -996,8 +1014,14 @@ def build_class_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 baseline_candidates = grouped_by_class.get(baseline_class, [])
                 if not target_candidates or not baseline_candidates:
                     continue
-                target_row = min(target_candidates, key=lambda row: _float_or_nan(row.get("tracking_error_deg")))
-                baseline_row = min(baseline_candidates, key=lambda row: _float_or_nan(row.get("tracking_error_deg")))
+                target_row = min(
+                    target_candidates,
+                    key=lambda row: _float_or_nan(row.get("tracking_error_deg")),
+                )
+                baseline_row = min(
+                    baseline_candidates,
+                    key=lambda row: _float_or_nan(row.get("tracking_error_deg")),
+                )
                 target_error = _float_or_nan(target_row.get("tracking_error_deg"))
                 baseline_error = _float_or_nan(baseline_row.get("tracking_error_deg"))
                 if not math.isfinite(target_error) or not math.isfinite(baseline_error):
@@ -1081,7 +1105,9 @@ def _claim_sentence(row: dict[str, Any], evidence: str) -> str:
     )
 
 
-def build_claim_candidates(class_comparisons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_claim_candidates(
+    class_comparisons: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     relevant_baselines = {"raw_measurement", "causal_baseline", "offline_smoother"}
     candidates = []
     for row in class_comparisons:
@@ -1147,7 +1173,12 @@ def build_paper_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         best = min(_float_or_nan(row.get("tracking_error_deg")) for row in finite_rows)
         for row in finite_rows:
-            if math.isclose(_float_or_nan(row.get("tracking_error_deg")), best, rel_tol=1e-12, abs_tol=1e-12):
+            if math.isclose(
+                _float_or_nan(row.get("tracking_error_deg")),
+                best,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            ):
                 win_counts[_paper_group_key(row)] += 1
 
     summary_rows = []
@@ -1179,7 +1210,7 @@ def build_paper_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(row.get("dataset", "")),
             str(row.get("source", "")),
             str(row.get("motion_bin", "")),
-            _float_or_nan(row.get("mean_tracking_error_deg")) if math.isfinite(_float_or_nan(row.get("mean_tracking_error_deg"))) else float("inf"),
+            (_float_or_nan(row.get("mean_tracking_error_deg")) if math.isfinite(_float_or_nan(row.get("mean_tracking_error_deg"))) else float("inf")),
             str(row.get("method", "")),
         ),
     )
@@ -1247,7 +1278,10 @@ def build_sanity_report(
         finite_rows = [row for row in group_rows if math.isfinite(_float_or_nan(row.get("mean_tracking_error_deg")))]
         if not finite_rows:
             continue
-        best = min(finite_rows, key=lambda row: _float_or_nan(row.get("mean_tracking_error_deg")))
+        best = min(
+            finite_rows,
+            key=lambda row: _float_or_nan(row.get("mean_tracking_error_deg")),
+        )
         best_methods.append(
             {
                 "dataset": summary_key[0],
@@ -1597,8 +1631,16 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
         encoding="utf-8",
     )
     _write_sanity_report_markdown(Path(outputs["sanity_report_markdown"]), sanity_report)
-    _write_table_csv(Path(outputs["comparison_report_csv"]), method_comparisons, METHOD_COMPARISON_COLUMNS)
-    _write_table_csv(Path(outputs["class_comparisons_csv"]), class_comparisons, CLASS_COMPARISON_COLUMNS)
+    _write_table_csv(
+        Path(outputs["comparison_report_csv"]),
+        method_comparisons,
+        METHOD_COMPARISON_COLUMNS,
+    )
+    _write_table_csv(
+        Path(outputs["class_comparisons_csv"]),
+        class_comparisons,
+        CLASS_COMPARISON_COLUMNS,
+    )
     Path(outputs["comparison_report_json"]).write_text(
         json.dumps(
             {
