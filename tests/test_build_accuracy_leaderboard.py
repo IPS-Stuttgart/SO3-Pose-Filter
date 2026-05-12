@@ -86,6 +86,12 @@ class AccuracyLeaderboardTest(unittest.TestCase):
                 detector_dataset="detector_hmr",
             )
             self.assertIn("noise_deg", module.LEADERBOARD_COLUMNS)
+            self.assertIn("method_class", module.LEADERBOARD_COLUMNS)
+            class_by_method = {row["method"]: row["method_class"] for row in leaderboard_rows}
+            self.assertEqual(class_by_method["raw"], "raw_measurement")
+            self.assertEqual(class_by_method["persistence"], "causal_baseline")
+            self.assertEqual(class_by_method["gaussian_rw"], "causal_online_filter")
+            self.assertEqual(class_by_method["savgol_tangent"], "offline_smoother")
             best_by_condition = {(row["noise_deg"], row["occlusion_prob"]): row["method"] for row in leaderboard_rows if row["rank"] == 1}
             self.assertEqual(best_by_condition, {("10.0", "0.0"): "savgol_tangent", ("20.0", "0.5"): "gaussian_rw"})
 
@@ -114,6 +120,7 @@ class AccuracyLeaderboardTest(unittest.TestCase):
             gaussian = next(row for row in summary["rows"] if row["method"] == "gaussian_rw")
             self.assertEqual(gaussian["condition_count"], 2)
             self.assertEqual(gaussian["win_count"], 1)
+            self.assertEqual(gaussian["method_class"], "causal_online_filter")
             self.assertAlmostEqual(gaussian["mean_tracking_error_deg"], 10.0)
 
             sanity = json.loads(Path(outputs["sanity_report_json"]).read_text(encoding="utf-8"))

@@ -77,6 +77,7 @@ LEADERBOARD_COLUMNS = [
     "noise_deg",
     "occlusion_prob",
     "method",
+    "method_class",
     "transition_model",
     "filter_backend",
     "num_particles",
@@ -98,6 +99,7 @@ PAPER_SUMMARY_COLUMNS = [
     "source",
     "motion_bin",
     "method",
+    "method_class",
     "condition_count",
     "win_count",
     "mean_tracking_error_deg",
@@ -270,6 +272,7 @@ def _write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
         "noise",
         "occlusion",
         "method",
+        "class",
         "tracking (deg)",
         "visible",
         "occluded",
@@ -288,6 +291,7 @@ def _write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
         "noise_deg",
         "occlusion_prob",
         "method",
+        "method_class",
         "tracking_error_deg",
         "visible_error_deg",
         "occluded_error_deg",
@@ -341,6 +345,7 @@ def _write_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "noise_deg",
         "occlusion_prob",
         "method",
+        "method_class",
         "tracking_error_deg",
         "visible_error_deg",
         "occluded_error_deg",
@@ -356,6 +361,7 @@ def _write_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "Noise",
         "Occl. prob.",
         "Method",
+        "Class",
         "Track.",
         "Vis.",
         "Occl.",
@@ -368,7 +374,7 @@ def _write_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         r"\centering",
         r"\caption{Accuracy leaderboard. Lower tracking error is better. Positive improvements indicate lower error than the baseline.}",
         r"\label{tab:accuracy-leaderboard}",
-        r"\begin{tabular}{rllllllrrrrrr}",
+        r"\begin{tabular}{rlllllllrrrrrr}",
         r"\toprule",
         " & ".join(headers) + r" \\",
         r"\midrule",
@@ -716,7 +722,8 @@ def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             previous_group = group
         else:
             rank += 1
-        ranked.append({"rank": rank, **row})
+        method_class = str(row.get("method_class", "")) or _method_class(row)
+        ranked.append({"rank": rank, **row, "method_class": method_class})
     return ranked
 
 
@@ -790,6 +797,9 @@ def _bootstrap_mean_ci(
 def _method_class(row: dict[str, Any] | None) -> str:
     if row is None:
         return ""
+    explicit = str(row.get("method_class", ""))
+    if explicit:
+        return explicit
     method = str(row.get("method", ""))
     backend = str(row.get("filter_backend", ""))
     if method in RAW_METHODS:
@@ -1109,6 +1119,7 @@ def build_paper_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "source": source,
                 "motion_bin": motion_bin,
                 "method": method,
+                "method_class": _method_class(group_rows[0]),
                 "condition_count": condition_count,
                 "win_count": win_counts.get(key, 0),
                 "mean_tracking_error_deg": _nanmean(row.get("tracking_error_deg") for row in group_rows),
@@ -1251,6 +1262,7 @@ def _write_paper_summary_markdown(path: Path, rows: list[dict[str, Any]]) -> Non
         "dataset",
         "motion bin",
         "method",
+        "class",
         "conditions",
         "wins",
         "tracking (deg)",
@@ -1263,6 +1275,7 @@ def _write_paper_summary_markdown(path: Path, rows: list[dict[str, Any]]) -> Non
         "dataset",
         "motion_bin",
         "method",
+        "method_class",
         "condition_count",
         "win_count",
         "mean_tracking_error_deg",
@@ -1291,6 +1304,7 @@ def _write_paper_summary_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "dataset",
         "motion_bin",
         "method",
+        "method_class",
         "condition_count",
         "win_count",
         "mean_tracking_error_deg",
@@ -1301,6 +1315,7 @@ def _write_paper_summary_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "Dataset",
         "Motion bin",
         "Method",
+        "Class",
         "Cond.",
         "Wins",
         "Track.",
@@ -1312,7 +1327,7 @@ def _write_paper_summary_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         r"\centering",
         r"\caption{Paper summary of the accuracy leaderboard, aggregated across noise and occlusion conditions.}",
         r"\label{tab:accuracy-leaderboard-paper-summary}",
-        r"\begin{tabular}{lllrrrrr}",
+        r"\begin{tabular}{llllrrrrr}",
         r"\toprule",
         " & ".join(headers) + r" \\",
         r"\midrule",
