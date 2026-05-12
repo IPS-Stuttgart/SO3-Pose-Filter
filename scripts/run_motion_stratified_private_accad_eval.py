@@ -31,6 +31,7 @@ DEFAULT_METHODS = (
     "constant_velocity",
     "gaussian_rw",
     "adaptive_gaussian_rw",
+    "noise_adaptive_selector",
     "mlp_delta",
     "history_mlp_delta",
     "gru_delta",

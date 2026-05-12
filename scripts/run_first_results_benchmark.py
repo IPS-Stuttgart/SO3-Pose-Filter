@@ -36,6 +36,7 @@ METHODS = (
     "constant_velocity",
     "gaussian_rw",
     "adaptive_gaussian_rw",
+    "noise_adaptive_selector",
     "pyrecest_pf",
     "mlp_delta",
     "pyrecest_mlp_pf",
@@ -123,6 +124,28 @@ def _method_row(
         "num_particles": int(num_particles),
         **filter_diagnostics,
     }
+
+
+def _noise_adaptive_selector_row(
+    base_row: dict[str, Any],
+    *,
+    threshold_deg: float,
+    num_particles: int,
+) -> dict[str, Any]:
+    use_gaussian = float(base_row["noise_deg"]) <= float(threshold_deg)
+    source_metric = "filter_error_deg" if use_gaussian else "persistence_error_deg"
+    row = _method_row(
+        "noise_adaptive_selector",
+        base_row,
+        base_row,
+        source_metric,
+        "noise_adaptive_selector",
+        "selector",
+        num_particles,
+    )
+    selected = "gaussian_rw" if use_gaussian else "persistence"
+    row["source_metric"] = f"{selected}:{source_metric}"
+    return row
 
 
 def _closest(values: list[float], target: float) -> float:
@@ -342,6 +365,7 @@ def run_first_results_benchmark(
         filter_backend="numpy",
         smoother_config=smoother_config,
     )
+    noise_adaptive_threshold_deg = float(config.get("noise_adaptive_selector_threshold_deg", 10.0))
     collapse_ablation_proposal_gain = float(config.get("collapse_ablation_proposal_gain", 0.0))
     deterministic_persistence_rows_by_key: dict[tuple[float, float], dict[str, Any]] = {}
     needs_deterministic_persistence_pf = "deterministic_persistence_pf" in methods
@@ -651,6 +675,14 @@ def run_first_results_benchmark(
                     "adaptive_gaussian_rw",
                     "numpy",
                     num_particles,
+                )
+            )
+        if "noise_adaptive_selector" in methods:
+            rows.append(
+                _noise_adaptive_selector_row(
+                    base_row,
+                    threshold_deg=noise_adaptive_threshold_deg,
+                    num_particles=num_particles,
                 )
             )
         if "pyrecest_pf" in methods:

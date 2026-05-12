@@ -163,12 +163,13 @@ jobs:
               "savgol_tangent",
               "gaussian_rw",
               "adaptive_gaussian_rw",
+              "noise_adaptive_selector",
               "pyrecest_pf",
               "mlp_delta",
               "pyrecest_mlp_pf",
               "history_mlp_delta",
           ]
-          assert benchmark_summary["row_count"] == 44
+          assert benchmark_summary["row_count"] == 48
           for smoother in ["smoother_ema", "smoother_chordal", "savgol_tangent"]:
               assert smoother in benchmark_summary["means_by_method"]
           assert benchmark_summary["acceptance"]["target_method"] == "pyrecest_pf"
