@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import tempfile
 import unittest
 from pathlib import Path
@@ -111,6 +112,46 @@ class AdaptiveGaussianRandomWalkTests(unittest.TestCase):
 
             self.assertIn("adaptive_gaussian_rw", summary["means_by_method"])
             self.assertEqual(summary["row_count"], 4)
+
+    def test_noise_adaptive_selector_switches_by_noise_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for idx in range(4):
+                _write_toy(root / f"seq_{idx}.npz", frames=60 + idx * 3)
+
+            output_dir = root / "benchmark"
+            summary = run_first_results_benchmark(
+                {
+                    "data_root": str(root),
+                    "dataset_subset": "",
+                    "frame_rate": 20,
+                    "num_joints": 23,
+                    "noise_deg": 5.0,
+                    "occlusion_prob": 0.25,
+                    "num_particles": 12,
+                    "transition_model": "gaussian_rw",
+                    "seed": 13,
+                    "max_sequences": 4,
+                    "min_frames": 10,
+                    "process_noise_deg": 3.0,
+                    "noise_adaptive_selector_threshold_deg": 10.0,
+                    "proposal_gain": 0.2,
+                    "factorized_update": True,
+                    "resample_threshold": 0.5,
+                },
+                output_dir,
+                methods=("raw", "persistence", "gaussian_rw", "noise_adaptive_selector"),
+                noise_grid=[5.0, 20.0],
+                occlusion_grid=[0.0],
+            )
+
+            self.assertIn("noise_adaptive_selector", summary["means_by_method"])
+            self.assertEqual(summary["row_count"], 8)
+            with (output_dir / "benchmark_metrics.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            selector_rows = {float(row["noise_deg"]): row for row in rows if row["method"] == "noise_adaptive_selector"}
+            self.assertEqual(selector_rows[5.0]["source_metric"], "gaussian_rw:filter_error_deg")
+            self.assertEqual(selector_rows[20.0]["source_metric"], "persistence:persistence_error_deg")
 
 
 if __name__ == "__main__":

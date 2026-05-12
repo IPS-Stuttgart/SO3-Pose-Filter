@@ -147,14 +147,14 @@ python scripts\run_first_results_benchmark.py `
 python scripts\run_first_results_benchmark.py `
   --config configs\accad_dynamic_benchmark.example.json `
   --output runs\accad_dynamic_mlp_single_point `
-  --methods raw persistence savgol_tangent gaussian_rw pyrecest_pf mlp_delta `
+  --methods raw persistence savgol_tangent gaussian_rw noise_adaptive_selector pyrecest_pf mlp_delta `
   --noise-deg 10 `
   --occlusion-prob 0.25
 
 python scripts\run_first_results_benchmark.py `
   --config configs\accad_dynamic_benchmark.example.json `
   --output runs\accad_dynamic_history_mlp_single_point `
-  --methods raw persistence savgol_tangent gaussian_rw pyrecest_pf mlp_delta history_mlp_delta `
+  --methods raw persistence savgol_tangent gaussian_rw noise_adaptive_selector pyrecest_pf mlp_delta history_mlp_delta `
   --noise-deg 10 `
   --occlusion-prob 0.25
 ```
@@ -201,7 +201,8 @@ The full-data motion-stratified runner writes the paper-facing aggregate tables:
 - `transition_tracking_diagnostics_by_motion_bin.csv`
 
 For the current balanced default, `benchmark_heatmap_method` and `benchmark_acceptance_method` are set to
-`gaussian_rw` because it is the strongest robust baseline in the frozen high-motion artifact.
+`noise_adaptive_selector`, a synthetic-benchmark policy that uses the Gaussian RW filter for low measurement
+noise and deterministic persistence for high measurement noise.
 
 ## PyRecEst Backend
 
@@ -248,6 +249,7 @@ Useful optional fields:
 - `robustness_occlusion_prob`
 - `process_noise_deg`
 - `noisy_persistence_process_noise_deg`
+- `noise_adaptive_selector_threshold_deg`
 - `filter_backend`: `numpy` or `pyrecest`
 - `proposal_gain`
 - `collapse_ablation_proposal_gain`

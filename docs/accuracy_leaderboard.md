@@ -60,6 +60,8 @@ The script writes:
 
 The ranking metric is `tracking_error_deg`; lower is better. For real detector/HMR outputs, the script adds `raw_measurement` and `persistence` baseline rows from the detector evaluation summary, then one filter row per transition-model run. The main leaderboard and paper summary include `method_class` so causal online filters, causal baselines, raw measurements, and offline smoothers remain visually distinct. Positive `improvement_vs_raw_deg` and `improvement_vs_persistence_deg` mean the method improved over those baselines. Positive `mean_improvement_deg` in the comparison report means the target method beat the stated baseline on matched conditions. The sign-test p-value is an exact two-sided paired sign test over matched conditions and ignores ties. Claim candidates are evidence labels for the current benchmark only; they should not be read as state-of-the-art claims without an external comparison.
 
+Motion-stratified synthetic artifacts may also include `noise_adaptive_selector`, which uses the known synthetic measurement noise level to select either the Gaussian RW filter or deterministic persistence. This row is intended as a diagnostic policy for synthetic robustness grids, not as a detector/HMR transition model.
+
 The `Accuracy Leaderboard` workflow validates these files, uploads them as a sanitized artifact,
 and writes the claim candidates, comparison report, and sanity report into the GitHub Actions job
 summary for quick inspection.

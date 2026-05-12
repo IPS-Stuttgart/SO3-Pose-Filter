@@ -847,6 +847,7 @@ def _method_class(row: dict[str, Any] | None) -> str:
     if method in {
         "gaussian_rw",
         "adaptive_gaussian_rw",
+        "noise_adaptive_selector",
         "constant_velocity",
         "mlp_delta",
         "history_mlp_delta",
