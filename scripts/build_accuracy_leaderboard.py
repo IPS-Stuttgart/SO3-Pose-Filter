@@ -136,6 +136,7 @@ METHOD_COMPARISON_COLUMNS = [
     "loss_count",
     "tie_count",
     "win_rate",
+    "sign_test_p_value",
 ]
 
 CLASS_COMPARISON_COLUMNS = [
@@ -155,6 +156,7 @@ CLASS_COMPARISON_COLUMNS = [
     "loss_count",
     "tie_count",
     "win_rate",
+    "sign_test_p_value",
     "target_best_methods",
     "baseline_best_methods",
 ]
@@ -850,6 +852,15 @@ def _comparison_counts(differences: list[float]) -> tuple[int, int, int, float]:
     return win_count, loss_count, tie_count, win_rate
 
 
+def _two_sided_sign_test_p_value(win_count: int, loss_count: int) -> float:
+    trial_count = win_count + loss_count
+    if trial_count == 0:
+        return float("nan")
+    tail_count = min(win_count, loss_count)
+    tail_probability = sum(math.comb(trial_count, k) for k in range(tail_count + 1)) / float(2**trial_count)
+    return min(1.0, 2.0 * tail_probability)
+
+
 def build_method_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     condition_rows = _condition_method_lookup(rows)
     context_conditions: dict[tuple[str, str, str], list[tuple[str, str, str, str, str]]] = defaultdict(list)
@@ -895,6 +906,7 @@ def build_method_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
                     seed_parts=(*context_key, target, baseline),
                 )
                 win_count, loss_count, tie_count, win_rate = _comparison_counts(differences)
+                sign_test_p_value = _two_sided_sign_test_p_value(win_count, loss_count)
                 comparison_rows.append(
                     {
                         "dataset": dataset,
@@ -915,6 +927,7 @@ def build_method_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
                         "loss_count": loss_count,
                         "tie_count": tie_count,
                         "win_rate": win_rate,
+                        "sign_test_p_value": sign_test_p_value,
                     }
                 )
     return sorted(
@@ -977,6 +990,7 @@ def build_class_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 seed_parts=(*context_key, target_class, baseline_class),
             )
             win_count, loss_count, tie_count, win_rate = _comparison_counts(differences)
+            sign_test_p_value = _two_sided_sign_test_p_value(win_count, loss_count)
             comparison_rows.append(
                 {
                     "dataset": dataset,
@@ -995,6 +1009,7 @@ def build_class_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "loss_count": loss_count,
                     "tie_count": tie_count,
                     "win_rate": win_rate,
+                    "sign_test_p_value": sign_test_p_value,
                     "target_best_methods": _method_count_summary(target_methods),
                     "baseline_best_methods": _method_count_summary(baseline_methods),
                 }
@@ -1030,12 +1045,13 @@ def _claim_sentence(row: dict[str, Any], evidence: str) -> str:
     ci_low = _format_float(row.get("ci95_low_deg"))
     ci_high = _format_float(row.get("ci95_high_deg"))
     win_rate = _format_float(row.get("win_rate"))
+    sign_test_p = _format_float(row.get("sign_test_p_value"))
     target_methods = str(row.get("target_best_methods", ""))
     baseline_methods = str(row.get("baseline_best_methods", ""))
     return (
         f"{target} versus {baseline}: {evidence}; mean paired improvement "
         f"{mean_improvement} deg over {condition_count} matched conditions "
-        f"(win rate {win_rate}, 95% CI [{ci_low}, {ci_high}]). "
+        f"(win rate {win_rate}, sign-test p={sign_test_p}, 95% CI [{ci_low}, {ci_high}]). "
         f"Target best methods: {target_methods or 'n/a'}. "
         f"Baseline best methods: {baseline_methods or 'n/a'}."
     )
@@ -1067,6 +1083,7 @@ def build_claim_candidates(class_comparisons: list[dict[str, Any]]) -> list[dict
                 "loss_count": row.get("loss_count", ""),
                 "tie_count": row.get("tie_count", ""),
                 "win_rate": row.get("win_rate", ""),
+                "sign_test_p_value": row.get("sign_test_p_value", ""),
                 "target_best_methods": row.get("target_best_methods", ""),
                 "baseline_best_methods": row.get("baseline_best_methods", ""),
                 "claim_sentence": _claim_sentence(row, evidence),
@@ -1404,12 +1421,12 @@ def _write_comparison_report_markdown(
         "# Accuracy leaderboard comparison report",
         "",
         "Positive improvements mean the target has lower tracking error than the baseline on matched conditions.",
-        "Intervals are deterministic bootstrap percentile intervals over matched noise/occlusion conditions.",
+        "Intervals are deterministic bootstrap percentile intervals over matched noise/occlusion conditions. The sign-test p-value is an exact two-sided paired sign test that ignores ties.",
         "",
         "## Method Comparisons",
         "",
-        "| dataset | motion bin | target | target class | baseline | baseline class | conditions | mean improvement | 95% CI | wins | losses | win rate |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| dataset | motion bin | target | target class | baseline | baseline class | conditions | mean improvement | 95% CI | wins | losses | win rate | sign-test p |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in method_comparisons:
         lines.append(
@@ -1428,6 +1445,7 @@ def _write_comparison_report_markdown(
                     _escape_markdown(row.get("win_count", "")),
                     _escape_markdown(row.get("loss_count", "")),
                     _escape_markdown(row.get("win_rate", "")),
+                    _escape_markdown(row.get("sign_test_p_value", "")),
                 ]
             )
             + " |"
@@ -1438,8 +1456,8 @@ def _write_comparison_report_markdown(
             "",
             "## Class Comparisons",
             "",
-            "| dataset | motion bin | target class | baseline class | conditions | mean improvement | 95% CI | wins | losses | win rate | target best methods | baseline best methods |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| dataset | motion bin | target class | baseline class | conditions | mean improvement | 95% CI | wins | losses | win rate | sign-test p | target best methods | baseline best methods |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for row in class_comparisons:
@@ -1457,6 +1475,7 @@ def _write_comparison_report_markdown(
                     _escape_markdown(row.get("win_count", "")),
                     _escape_markdown(row.get("loss_count", "")),
                     _escape_markdown(row.get("win_rate", "")),
+                    _escape_markdown(row.get("sign_test_p_value", "")),
                     _escape_markdown(row.get("target_best_methods", "")),
                     _escape_markdown(row.get("baseline_best_methods", "")),
                 ]
@@ -1474,8 +1493,8 @@ def _write_claim_candidates_markdown(path: Path, rows: list[dict[str, Any]]) -> 
         "",
         "These are paper-facing claim checks derived from paired class comparisons. They are not SOTA claims; they summarize whether the current evidence supports a cautious within-benchmark statement.",
         "",
-        "| dataset | motion bin | baseline class | evidence | mean improvement | 95% CI | wins | losses | claim sentence |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| dataset | motion bin | baseline class | evidence | mean improvement | 95% CI | wins | losses | sign-test p | claim sentence |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in rows:
         lines.append(
@@ -1490,6 +1509,7 @@ def _write_claim_candidates_markdown(path: Path, rows: list[dict[str, Any]]) -> 
                     f"[{_escape_markdown(row.get('ci95_low_deg', ''))}, {_escape_markdown(row.get('ci95_high_deg', ''))}]",
                     _escape_markdown(row.get("win_count", "")),
                     _escape_markdown(row.get("loss_count", "")),
+                    _escape_markdown(row.get("sign_test_p_value", "")),
                     _escape_markdown(row.get("claim_sentence", "")),
                 ]
             )
