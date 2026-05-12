@@ -231,6 +231,42 @@ jobs:
           }, indent=2))
           PY
 
+      - name: Write accuracy leaderboard job summary
+        if: always()
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "$OUTPUT_DIR" ]; then
+            echo "No leaderboard output directory was produced." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "## Accuracy leaderboard"
+            echo
+            echo "Generated files:"
+            echo
+            find "$OUTPUT_DIR" -maxdepth 1 -type f -printf "- %f\n" | sort
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for report in \
+            accuracy_leaderboard_claim_candidates.md \
+            accuracy_leaderboard_comparison_report.md \
+            accuracy_leaderboard_sanity_report.md
+          do
+            if [ -s "$OUTPUT_DIR/$report" ]; then
+              {
+                echo
+                echo "<details><summary>${report}</summary>"
+                echo
+                cat "$OUTPUT_DIR/$report"
+                echo
+                echo "</details>"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
       - name: Upload accuracy leaderboard
         uses: actions/upload-artifact@v7
         with:
