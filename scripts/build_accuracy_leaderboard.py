@@ -188,6 +188,24 @@ CLAIM_CANDIDATE_COLUMNS = [
     "claim_sentence",
 ]
 
+SELECTOR_HEADROOM_COLUMNS = [
+    "dataset",
+    "source",
+    "motion_bin",
+    "condition_count",
+    "best_threshold_deg",
+    "best_threshold_mean_tracking_error_deg",
+    "oracle_mean_tracking_error_deg",
+    "persistence_mean_tracking_error_deg",
+    "gaussian_rw_mean_tracking_error_deg",
+    "noise_adaptive_selector_mean_tracking_error_deg",
+    "threshold_gap_to_oracle_deg",
+    "oracle_gaussian_count",
+    "oracle_persistence_count",
+    "threshold_gaussian_count",
+    "threshold_persistence_count",
+]
+
 
 @dataclass(frozen=True)
 class DetectorRunSpec:
@@ -433,6 +451,9 @@ def _standard_outputs(output_dir: Path) -> dict[str, str]:
         "claim_candidates_csv": str(output_dir / "accuracy_leaderboard_claim_candidates.csv"),
         "claim_candidates_json": str(output_dir / "accuracy_leaderboard_claim_candidates.json"),
         "claim_candidates_markdown": str(output_dir / "accuracy_leaderboard_claim_candidates.md"),
+        "selector_headroom_csv": str(output_dir / "accuracy_leaderboard_selector_headroom.csv"),
+        "selector_headroom_json": str(output_dir / "accuracy_leaderboard_selector_headroom.json"),
+        "selector_headroom_markdown": str(output_dir / "accuracy_leaderboard_selector_headroom.md"),
     }
 
 
@@ -1160,6 +1181,98 @@ def build_claim_candidates(
     )
 
 
+def _threshold_label(threshold: float) -> str | float:
+    if threshold == float("-inf"):
+        return "always_persistence"
+    if threshold == float("inf"):
+        return "always_gaussian_rw"
+    return threshold
+
+
+def build_selector_headroom(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Summarize how much a threshold selector could gain over fixed baselines."""
+    condition_rows = _condition_method_lookup(rows)
+    context_conditions: dict[tuple[str, str, str], list[tuple[tuple[str, str, str, str, str], dict[str, dict[str, Any]]]]] = defaultdict(list)
+    for condition_key, methods in condition_rows.items():
+        if "persistence" not in methods or "gaussian_rw" not in methods:
+            continue
+        noise = _float_or_nan(condition_key[3])
+        if not math.isfinite(noise):
+            continue
+        persistence_error = _float_or_nan(methods["persistence"].get("tracking_error_deg"))
+        gaussian_error = _float_or_nan(methods["gaussian_rw"].get("tracking_error_deg"))
+        if not math.isfinite(persistence_error) or not math.isfinite(gaussian_error):
+            continue
+        context_conditions[(condition_key[0], condition_key[1], condition_key[2])].append((condition_key, methods))
+
+    out = []
+    for context_key, items in sorted(context_conditions.items()):
+        if not items:
+            continue
+        unique_noise = sorted({_float_or_nan(condition_key[3]) for condition_key, _ in items})
+        thresholds = [float("-inf"), *unique_noise, float("inf")]
+        scored_thresholds: list[tuple[float, float, int, int]] = []
+        for threshold in thresholds:
+            errors = []
+            gaussian_count = 0
+            persistence_count = 0
+            for condition_key, methods in items:
+                noise = _float_or_nan(condition_key[3])
+                use_gaussian = noise <= threshold
+                selected_method = "gaussian_rw" if use_gaussian else "persistence"
+                if use_gaussian:
+                    gaussian_count += 1
+                else:
+                    persistence_count += 1
+                errors.append(_float_or_nan(methods[selected_method].get("tracking_error_deg")))
+            scored_thresholds.append((_nanmean(errors), threshold, gaussian_count, persistence_count))
+        best_error, best_threshold, threshold_gaussian_count, threshold_persistence_count = min(scored_thresholds, key=lambda item: (item[0], str(item[1])))
+
+        oracle_errors = []
+        persistence_errors = []
+        gaussian_errors = []
+        selector_errors = []
+        oracle_gaussian_count = 0
+        oracle_persistence_count = 0
+        for _, methods in items:
+            persistence_error = _float_or_nan(methods["persistence"].get("tracking_error_deg"))
+            gaussian_error = _float_or_nan(methods["gaussian_rw"].get("tracking_error_deg"))
+            persistence_errors.append(persistence_error)
+            gaussian_errors.append(gaussian_error)
+            if gaussian_error < persistence_error:
+                oracle_gaussian_count += 1
+                oracle_errors.append(gaussian_error)
+            else:
+                oracle_persistence_count += 1
+                oracle_errors.append(persistence_error)
+            selector = methods.get("noise_adaptive_selector")
+            if selector is not None:
+                selector_errors.append(_float_or_nan(selector.get("tracking_error_deg")))
+
+        oracle_error = _nanmean(oracle_errors)
+        selector_error = _nanmean(selector_errors)
+        out.append(
+            {
+                "dataset": context_key[0],
+                "source": context_key[1],
+                "motion_bin": context_key[2],
+                "condition_count": len(items),
+                "best_threshold_deg": _threshold_label(best_threshold),
+                "best_threshold_mean_tracking_error_deg": best_error,
+                "oracle_mean_tracking_error_deg": oracle_error,
+                "persistence_mean_tracking_error_deg": _nanmean(persistence_errors),
+                "gaussian_rw_mean_tracking_error_deg": _nanmean(gaussian_errors),
+                "noise_adaptive_selector_mean_tracking_error_deg": selector_error,
+                "threshold_gap_to_oracle_deg": best_error - oracle_error,
+                "oracle_gaussian_count": oracle_gaussian_count,
+                "oracle_persistence_count": oracle_persistence_count,
+                "threshold_gaussian_count": threshold_gaussian_count,
+                "threshold_persistence_count": threshold_persistence_count,
+            }
+        )
+    return out
+
+
 def build_paper_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     condition_groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     paper_groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -1578,6 +1691,41 @@ def _write_claim_candidates_markdown(path: Path, rows: list[dict[str, Any]]) -> 
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _write_selector_headroom_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Accuracy leaderboard selector headroom",
+        "",
+        "This diagnostic compares fixed persistence, fixed Gaussian RW, the reported noise-adaptive selector, the best post-hoc noise threshold, and an oracle that picks the better of persistence/Gaussian RW per matched condition.",
+        "",
+        "| dataset | motion bin | conditions | best threshold | threshold error | oracle error | gap | persistence | gaussian RW | selector | oracle picks | threshold picks |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _escape_markdown(row.get("dataset", "")),
+                    _escape_markdown(row.get("motion_bin", "")),
+                    _escape_markdown(row.get("condition_count", "")),
+                    _escape_markdown(row.get("best_threshold_deg", "")),
+                    _escape_markdown(row.get("best_threshold_mean_tracking_error_deg", "")),
+                    _escape_markdown(row.get("oracle_mean_tracking_error_deg", "")),
+                    _escape_markdown(row.get("threshold_gap_to_oracle_deg", "")),
+                    _escape_markdown(row.get("persistence_mean_tracking_error_deg", "")),
+                    _escape_markdown(row.get("gaussian_rw_mean_tracking_error_deg", "")),
+                    _escape_markdown(row.get("noise_adaptive_selector_mean_tracking_error_deg", "")),
+                    f"g={_escape_markdown(row.get('oracle_gaussian_count', ''))}, p={_escape_markdown(row.get('oracle_persistence_count', ''))}",
+                    f"g={_escape_markdown(row.get('threshold_gaussian_count', ''))}, p={_escape_markdown(row.get('threshold_persistence_count', ''))}",
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def build_leaderboard(
     *,
     detector_runs: list[DetectorRunSpec],
@@ -1602,6 +1750,7 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
     method_comparisons = build_method_comparisons(rows)
     class_comparisons = build_class_comparisons(rows)
     claim_candidates = build_claim_candidates(class_comparisons)
+    selector_headroom = build_selector_headroom(rows)
     _write_csv(Path(outputs["csv"]), rows)
     Path(outputs["json"]).write_text(
         json.dumps(
@@ -1613,6 +1762,7 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
                 "method_comparisons": method_comparisons,
                 "class_comparisons": class_comparisons,
                 "claim_candidates": claim_candidates,
+                "selector_headroom": selector_headroom,
             },
             indent=2,
         ),
@@ -1665,6 +1815,12 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
         encoding="utf-8",
     )
     _write_claim_candidates_markdown(Path(outputs["claim_candidates_markdown"]), claim_candidates)
+    _write_table_csv(Path(outputs["selector_headroom_csv"]), selector_headroom, SELECTOR_HEADROOM_COLUMNS)
+    Path(outputs["selector_headroom_json"]).write_text(
+        json.dumps({"rows": selector_headroom, "row_count": len(selector_headroom)}, indent=2),
+        encoding="utf-8",
+    )
+    _write_selector_headroom_markdown(Path(outputs["selector_headroom_markdown"]), selector_headroom)
     return outputs
 
 

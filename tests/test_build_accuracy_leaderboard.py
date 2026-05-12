@@ -115,6 +115,9 @@ class AccuracyLeaderboardTest(unittest.TestCase):
                 "claim_candidates_csv",
                 "claim_candidates_json",
                 "claim_candidates_markdown",
+                "selector_headroom_csv",
+                "selector_headroom_json",
+                "selector_headroom_markdown",
             ]:
                 self.assertTrue(Path(outputs[key]).is_file(), key)
                 if key.endswith("_csv"):
@@ -155,6 +158,15 @@ class AccuracyLeaderboardTest(unittest.TestCase):
             self.assertIn("causal online filter versus raw measurement", raw_claim["claim_sentence"])
             offline_claim = next(row for row in claims["rows"] if row["target_class"] == "causal_online_filter" and row["baseline_class"] == "offline_smoother")
             self.assertEqual(offline_claim["evidence"], "mixed")
+
+            headroom = json.loads(Path(outputs["selector_headroom_json"]).read_text(encoding="utf-8"))
+            self.assertEqual(headroom["row_count"], 1)
+            selector_row = headroom["rows"][0]
+            self.assertEqual(selector_row["condition_count"], 2)
+            self.assertEqual(selector_row["best_threshold_deg"], 20.0)
+            self.assertAlmostEqual(selector_row["best_threshold_mean_tracking_error_deg"], 10.0)
+            self.assertAlmostEqual(selector_row["oracle_mean_tracking_error_deg"], 10.0)
+            self.assertEqual(selector_row["oracle_gaussian_count"], 2)
 
 
 if __name__ == "__main__":

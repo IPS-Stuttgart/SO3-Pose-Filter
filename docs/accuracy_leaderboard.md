@@ -57,6 +57,7 @@ The script writes:
 - `accuracy_leaderboard_comparison_report.json` - method and method-class comparisons with win rates, exact paired sign-test p-values, and bootstrap intervals.
 - `accuracy_leaderboard_comparison_report.md` - readable comparison report, including causal-online versus offline-smoother comparisons.
 - `accuracy_leaderboard_claim_candidates.*` - cautious within-benchmark claim checks derived from the class comparisons.
+- `accuracy_leaderboard_selector_headroom.*` - diagnostic comparison of fixed persistence, fixed Gaussian RW, the noise-adaptive selector, the best post-hoc noise threshold, and an oracle persistence/Gaussian selector.
 
 The ranking metric is `tracking_error_deg`; lower is better. For real detector/HMR outputs, the script adds `raw_measurement` and `persistence` baseline rows from the detector evaluation summary, then one filter row per transition-model run. The main leaderboard and paper summary include `method_class` so causal online filters, causal baselines, raw measurements, and offline smoothers remain visually distinct. Positive `improvement_vs_raw_deg` and `improvement_vs_persistence_deg` mean the method improved over those baselines. Positive `mean_improvement_deg` in the comparison report means the target method beat the stated baseline on matched conditions. The sign-test p-value is an exact two-sided paired sign test over matched conditions and ignores ties. Claim candidates are evidence labels for the current benchmark only; they should not be read as state-of-the-art claims without an external comparison.
 
