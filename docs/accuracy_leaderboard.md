@@ -44,9 +44,14 @@ python scripts/build_accuracy_leaderboard.py \
 
 The script writes:
 
-- `accuracy_leaderboard.md` — paper-facing Markdown table.
-- `accuracy_leaderboard.tex` — `booktabs` LaTeX table for `main.tex`.
-- `accuracy_leaderboard.csv` — complete machine-readable table.
-- `accuracy_leaderboard.json` — JSON table with row count.
+- `accuracy_leaderboard.md` - paper-facing Markdown table.
+- `accuracy_leaderboard.tex` - `booktabs` LaTeX table for `main.tex`.
+- `accuracy_leaderboard.csv` - complete machine-readable table.
+- `accuracy_leaderboard.json` - JSON table with row count, paper summary, sanity report, and comparison rows.
+- `accuracy_leaderboard_paper_summary.*` - aggregate paper-facing summary across noise and occlusion conditions.
+- `accuracy_leaderboard_sanity_report.*` - baseline coverage and duplicate-row checks.
+- `accuracy_leaderboard_method_comparisons.csv` - paired method-vs-baseline comparisons over matched conditions.
+- `accuracy_leaderboard_comparison_report.json` - method and method-class comparisons with win rates and bootstrap intervals.
+- `accuracy_leaderboard_comparison_report.md` - readable comparison report, including causal-online versus offline-smoother comparisons.
 
-The ranking metric is `tracking_error_deg`; lower is better. For real detector/HMR outputs, the script adds `raw_measurement` and `persistence` baseline rows from the detector evaluation summary, then one filter row per transition-model run. Positive `improvement_vs_raw_deg` and `improvement_vs_persistence_deg` mean the method improved over those baselines.
+The ranking metric is `tracking_error_deg`; lower is better. For real detector/HMR outputs, the script adds `raw_measurement` and `persistence` baseline rows from the detector evaluation summary, then one filter row per transition-model run. Positive `improvement_vs_raw_deg` and `improvement_vs_persistence_deg` mean the method improved over those baselines. Positive `mean_improvement_deg` in the comparison report means the target method beat the stated baseline on matched conditions.

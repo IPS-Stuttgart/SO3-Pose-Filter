@@ -197,6 +197,9 @@ jobs:
           test -s "$OUTPUT_DIR/accuracy_leaderboard_paper_summary.tex"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_sanity_report.json"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_sanity_report.md"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_method_comparisons.csv"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_comparison_report.json"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_comparison_report.md"
           python - <<'PY'
           import json
           import os
@@ -209,7 +212,15 @@ jobs:
           summary = json.loads((output_dir / "accuracy_leaderboard_paper_summary.json").read_text(encoding="utf-8"))
           if int(summary.get("row_count", 0)) <= 0:
               raise SystemExit("accuracy_leaderboard_paper_summary.json has no rows")
-          print(json.dumps({"row_count": payload["row_count"], "paper_summary_row_count": summary["row_count"]}, indent=2))
+          comparisons = json.loads((output_dir / "accuracy_leaderboard_comparison_report.json").read_text(encoding="utf-8"))
+          if int(comparisons.get("method_comparison_count", 0)) <= 0:
+              raise SystemExit("accuracy_leaderboard_comparison_report.json has no method comparisons")
+          print(json.dumps({
+              "row_count": payload["row_count"],
+              "paper_summary_row_count": summary["row_count"],
+              "method_comparison_count": comparisons["method_comparison_count"],
+              "class_comparison_count": comparisons["class_comparison_count"],
+          }, indent=2))
           PY
 
       - name: Upload accuracy leaderboard

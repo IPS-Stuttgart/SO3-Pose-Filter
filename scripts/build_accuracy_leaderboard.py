@@ -39,6 +39,7 @@ import copy
 import csv
 import json
 import math
+import random
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -111,6 +112,50 @@ PAPER_SUMMARY_COLUMNS = [
 
 RAW_METHODS = {"raw", "raw_measurement"}
 PERSISTENCE_METHODS = {"persistence", "deterministic_persistence_pf"}
+OFFLINE_SMOOTHER_METHODS = {"smoother_ema", "smoother_chordal", "savgol_tangent"}
+CANONICAL_COMPARISON_BASELINES = ["raw", "raw_measurement", "persistence", "savgol_tangent"]
+
+METHOD_COMPARISON_COLUMNS = [
+    "dataset",
+    "source",
+    "motion_bin",
+    "target_method",
+    "target_method_class",
+    "baseline_method",
+    "baseline_method_class",
+    "condition_count",
+    "target_mean_tracking_error_deg",
+    "baseline_mean_tracking_error_deg",
+    "mean_improvement_deg",
+    "median_improvement_deg",
+    "ci95_low_deg",
+    "ci95_high_deg",
+    "win_count",
+    "loss_count",
+    "tie_count",
+    "win_rate",
+]
+
+CLASS_COMPARISON_COLUMNS = [
+    "dataset",
+    "source",
+    "motion_bin",
+    "target_class",
+    "baseline_class",
+    "condition_count",
+    "target_best_mean_tracking_error_deg",
+    "baseline_best_mean_tracking_error_deg",
+    "mean_improvement_deg",
+    "median_improvement_deg",
+    "ci95_low_deg",
+    "ci95_high_deg",
+    "win_count",
+    "loss_count",
+    "tie_count",
+    "win_rate",
+    "target_best_methods",
+    "baseline_best_methods",
+]
 
 
 @dataclass(frozen=True)
@@ -346,6 +391,9 @@ def _standard_outputs(output_dir: Path) -> dict[str, str]:
         "paper_summary_latex": str(output_dir / "accuracy_leaderboard_paper_summary.tex"),
         "sanity_report_json": str(output_dir / "accuracy_leaderboard_sanity_report.json"),
         "sanity_report_markdown": str(output_dir / "accuracy_leaderboard_sanity_report.md"),
+        "comparison_report_csv": str(output_dir / "accuracy_leaderboard_method_comparisons.csv"),
+        "comparison_report_json": str(output_dir / "accuracy_leaderboard_comparison_report.json"),
+        "comparison_report_markdown": str(output_dir / "accuracy_leaderboard_comparison_report.md"),
     }
 
 
@@ -697,6 +745,251 @@ def _sum_row_counts(rows: list[dict[str, Any]]) -> int | str:
     return int(sum(numeric))
 
 
+def _median(values: list[float]) -> float:
+    if not values:
+        return float("nan")
+    sorted_values = sorted(values)
+    middle = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return float(sorted_values[middle])
+    return float((sorted_values[middle - 1] + sorted_values[middle]) / 2.0)
+
+
+def _stable_seed(parts: Iterable[Any]) -> int:
+    payload = json.dumps([str(part) for part in parts], sort_keys=True)
+    seed = 0
+    for index, char in enumerate(payload, start=1):
+        seed = (seed + index * ord(char)) % (2**32)
+    return seed
+
+
+def _bootstrap_mean_ci(
+    values: list[float],
+    *,
+    seed_parts: Iterable[Any],
+    iterations: int = 2000,
+) -> tuple[float, float]:
+    if not values:
+        return float("nan"), float("nan")
+    if len(values) == 1:
+        return float(values[0]), float(values[0])
+    rng = random.Random(_stable_seed(seed_parts))  # nosec B311
+    sample_count = len(values)
+    means = []
+    for _ in range(iterations):
+        sample = [values[rng.randrange(sample_count)] for _ in range(sample_count)]
+        means.append(sum(sample) / sample_count)
+    means.sort()
+    low_index = int(0.025 * (iterations - 1))
+    high_index = int(0.975 * (iterations - 1))
+    return float(means[low_index]), float(means[high_index])
+
+
+def _method_class(row: dict[str, Any] | None) -> str:
+    if row is None:
+        return ""
+    method = str(row.get("method", ""))
+    backend = str(row.get("filter_backend", ""))
+    if method in RAW_METHODS:
+        return "raw_measurement"
+    if method in PERSISTENCE_METHODS:
+        return "causal_baseline"
+    if backend == "offline_smoother" or method in OFFLINE_SMOOTHER_METHODS:
+        return "offline_smoother"
+    if backend in {"numpy", "pyrecest"}:
+        return "causal_online_filter"
+    if method in {"gaussian_rw", "constant_velocity", "mlp_delta", "history_mlp_delta", "gru_delta", "learned_proposal"}:
+        return "causal_online_filter"
+    return "other"
+
+
+def _context_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("dataset", "")),
+        str(row.get("source", "")),
+        str(row.get("motion_bin", "")),
+    )
+
+
+def _condition_method_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str, str, str], dict[str, dict[str, Any]]]:
+    out: dict[tuple[str, str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in rows:
+        method = str(row.get("method", ""))
+        tracking = _float_or_nan(row.get("tracking_error_deg"))
+        if not method or not math.isfinite(tracking):
+            continue
+        out[_condition_key(row)].setdefault(method, row)
+    return out
+
+
+def _method_count_summary(methods: Iterable[str]) -> str:
+    counts: dict[str, int] = defaultdict(int)
+    for method in methods:
+        counts[method] += 1
+    return ";".join(f"{method}:{count}" for method, count in sorted(counts.items()))
+
+
+def _comparison_counts(differences: list[float]) -> tuple[int, int, int, float]:
+    epsilon = 1e-9
+    win_count = sum(1 for value in differences if value > epsilon)
+    loss_count = sum(1 for value in differences if value < -epsilon)
+    tie_count = len(differences) - win_count - loss_count
+    win_rate = float(win_count / len(differences)) if differences else float("nan")
+    return win_count, loss_count, tie_count, win_rate
+
+
+def build_method_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    condition_rows = _condition_method_lookup(rows)
+    context_conditions: dict[tuple[str, str, str], list[tuple[str, str, str, str, str]]] = defaultdict(list)
+    context_methods: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    for condition_key, methods in condition_rows.items():
+        context_key = condition_key[:3]
+        context_conditions[context_key].append(condition_key)
+        context_methods[context_key].update(methods)
+
+    comparison_rows = []
+    for context_key, available_methods in sorted(context_methods.items()):
+        dataset, source, motion_bin = context_key
+        baselines = [method for method in CANONICAL_COMPARISON_BASELINES if method in available_methods]
+        targets = sorted(method for method in available_methods if method not in RAW_METHODS and method not in PERSISTENCE_METHODS)
+        for target in targets:
+            for baseline in baselines:
+                if target == baseline:
+                    continue
+                differences = []
+                target_errors = []
+                baseline_errors = []
+                target_class = ""
+                baseline_class = ""
+                for condition_key in sorted(context_conditions[context_key]):
+                    condition_methods = condition_rows[condition_key]
+                    target_row = condition_methods.get(target)
+                    baseline_row = condition_methods.get(baseline)
+                    if target_row is None or baseline_row is None:
+                        continue
+                    target_error = _float_or_nan(target_row.get("tracking_error_deg"))
+                    baseline_error = _float_or_nan(baseline_row.get("tracking_error_deg"))
+                    if not math.isfinite(target_error) or not math.isfinite(baseline_error):
+                        continue
+                    target_errors.append(target_error)
+                    baseline_errors.append(baseline_error)
+                    differences.append(baseline_error - target_error)
+                    target_class = target_class or _method_class(target_row)
+                    baseline_class = baseline_class or _method_class(baseline_row)
+                if not differences:
+                    continue
+                ci_low, ci_high = _bootstrap_mean_ci(
+                    differences,
+                    seed_parts=(*context_key, target, baseline),
+                )
+                win_count, loss_count, tie_count, win_rate = _comparison_counts(differences)
+                comparison_rows.append(
+                    {
+                        "dataset": dataset,
+                        "source": source,
+                        "motion_bin": motion_bin,
+                        "target_method": target,
+                        "target_method_class": target_class,
+                        "baseline_method": baseline,
+                        "baseline_method_class": baseline_class,
+                        "condition_count": len(differences),
+                        "target_mean_tracking_error_deg": _nanmean(target_errors),
+                        "baseline_mean_tracking_error_deg": _nanmean(baseline_errors),
+                        "mean_improvement_deg": _nanmean(differences),
+                        "median_improvement_deg": _median(differences),
+                        "ci95_low_deg": ci_low,
+                        "ci95_high_deg": ci_high,
+                        "win_count": win_count,
+                        "loss_count": loss_count,
+                        "tie_count": tie_count,
+                        "win_rate": win_rate,
+                    }
+                )
+    return sorted(
+        comparison_rows,
+        key=lambda row: (
+            str(row.get("dataset", "")),
+            str(row.get("source", "")),
+            str(row.get("motion_bin", "")),
+            str(row.get("baseline_method", "")),
+            -_float_or_nan(row.get("mean_improvement_deg")),
+            str(row.get("target_method", "")),
+        ),
+    )
+
+
+def build_class_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    class_pairs = [
+        ("causal_online_filter", "offline_smoother"),
+        ("causal_online_filter", "causal_baseline"),
+        ("causal_online_filter", "raw_measurement"),
+        ("offline_smoother", "causal_baseline"),
+    ]
+    condition_rows = _condition_method_lookup(rows)
+    context_conditions: dict[tuple[str, str, str], list[tuple[str, str, str, str, str]]] = defaultdict(list)
+    for condition_key in condition_rows:
+        context_conditions[condition_key[:3]].append(condition_key)
+
+    comparison_rows = []
+    for context_key, condition_keys in sorted(context_conditions.items()):
+        dataset, source, motion_bin = context_key
+        for target_class, baseline_class in class_pairs:
+            differences = []
+            target_errors = []
+            baseline_errors = []
+            target_methods = []
+            baseline_methods = []
+            for condition_key in sorted(condition_keys):
+                grouped_by_class: dict[str, list[dict[str, Any]]] = defaultdict(list)
+                for row in condition_rows[condition_key].values():
+                    grouped_by_class[_method_class(row)].append(row)
+                target_candidates = grouped_by_class.get(target_class, [])
+                baseline_candidates = grouped_by_class.get(baseline_class, [])
+                if not target_candidates or not baseline_candidates:
+                    continue
+                target_row = min(target_candidates, key=lambda row: _float_or_nan(row.get("tracking_error_deg")))
+                baseline_row = min(baseline_candidates, key=lambda row: _float_or_nan(row.get("tracking_error_deg")))
+                target_error = _float_or_nan(target_row.get("tracking_error_deg"))
+                baseline_error = _float_or_nan(baseline_row.get("tracking_error_deg"))
+                if not math.isfinite(target_error) or not math.isfinite(baseline_error):
+                    continue
+                target_errors.append(target_error)
+                baseline_errors.append(baseline_error)
+                differences.append(baseline_error - target_error)
+                target_methods.append(str(target_row.get("method", "")))
+                baseline_methods.append(str(baseline_row.get("method", "")))
+            if not differences:
+                continue
+            ci_low, ci_high = _bootstrap_mean_ci(
+                differences,
+                seed_parts=(*context_key, target_class, baseline_class),
+            )
+            win_count, loss_count, tie_count, win_rate = _comparison_counts(differences)
+            comparison_rows.append(
+                {
+                    "dataset": dataset,
+                    "source": source,
+                    "motion_bin": motion_bin,
+                    "target_class": target_class,
+                    "baseline_class": baseline_class,
+                    "condition_count": len(differences),
+                    "target_best_mean_tracking_error_deg": _nanmean(target_errors),
+                    "baseline_best_mean_tracking_error_deg": _nanmean(baseline_errors),
+                    "mean_improvement_deg": _nanmean(differences),
+                    "median_improvement_deg": _median(differences),
+                    "ci95_low_deg": ci_low,
+                    "ci95_high_deg": ci_high,
+                    "win_count": win_count,
+                    "loss_count": loss_count,
+                    "tie_count": tie_count,
+                    "win_rate": win_rate,
+                    "target_best_methods": _method_count_summary(target_methods),
+                    "baseline_best_methods": _method_count_summary(baseline_methods),
+                }
+            )
+    return comparison_rows
+
+
 def build_paper_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     condition_groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     paper_groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -993,6 +1286,80 @@ def _write_sanity_report_markdown(path: Path, report: dict[str, Any]) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _write_comparison_report_markdown(
+    path: Path,
+    *,
+    method_comparisons: list[dict[str, Any]],
+    class_comparisons: list[dict[str, Any]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Accuracy leaderboard comparison report",
+        "",
+        "Positive improvements mean the target has lower tracking error than the baseline on matched conditions.",
+        "Intervals are deterministic bootstrap percentile intervals over matched noise/occlusion conditions.",
+        "",
+        "## Method Comparisons",
+        "",
+        "| dataset | motion bin | target | target class | baseline | baseline class | conditions | mean improvement | 95% CI | wins | losses | win rate |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in method_comparisons:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _escape_markdown(row.get("dataset", "")),
+                    _escape_markdown(row.get("motion_bin", "")),
+                    _escape_markdown(row.get("target_method", "")),
+                    _escape_markdown(row.get("target_method_class", "")),
+                    _escape_markdown(row.get("baseline_method", "")),
+                    _escape_markdown(row.get("baseline_method_class", "")),
+                    _escape_markdown(row.get("condition_count", "")),
+                    _escape_markdown(row.get("mean_improvement_deg", "")),
+                    f"[{_escape_markdown(row.get('ci95_low_deg', ''))}, {_escape_markdown(row.get('ci95_high_deg', ''))}]",
+                    _escape_markdown(row.get("win_count", "")),
+                    _escape_markdown(row.get("loss_count", "")),
+                    _escape_markdown(row.get("win_rate", "")),
+                ]
+            )
+            + " |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Class Comparisons",
+            "",
+            "| dataset | motion bin | target class | baseline class | conditions | mean improvement | 95% CI | wins | losses | win rate | target best methods | baseline best methods |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in class_comparisons:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _escape_markdown(row.get("dataset", "")),
+                    _escape_markdown(row.get("motion_bin", "")),
+                    _escape_markdown(row.get("target_class", "")),
+                    _escape_markdown(row.get("baseline_class", "")),
+                    _escape_markdown(row.get("condition_count", "")),
+                    _escape_markdown(row.get("mean_improvement_deg", "")),
+                    f"[{_escape_markdown(row.get('ci95_low_deg', ''))}, {_escape_markdown(row.get('ci95_high_deg', ''))}]",
+                    _escape_markdown(row.get("win_count", "")),
+                    _escape_markdown(row.get("loss_count", "")),
+                    _escape_markdown(row.get("win_rate", "")),
+                    _escape_markdown(row.get("target_best_methods", "")),
+                    _escape_markdown(row.get("baseline_best_methods", "")),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def build_leaderboard(
     *,
     detector_runs: list[DetectorRunSpec],
@@ -1014,6 +1381,8 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
     outputs = _standard_outputs(output_dir)
     paper_summary = build_paper_summary(rows)
     sanity_report = build_sanity_report(rows, paper_summary)
+    method_comparisons = build_method_comparisons(rows)
+    class_comparisons = build_class_comparisons(rows)
     _write_csv(Path(outputs["csv"]), rows)
     Path(outputs["json"]).write_text(
         json.dumps(
@@ -1022,6 +1391,8 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
                 "row_count": len(rows),
                 "paper_summary": paper_summary,
                 "sanity_report": sanity_report,
+                "method_comparisons": method_comparisons,
+                "class_comparisons": class_comparisons,
             },
             indent=2,
         ),
@@ -1041,6 +1412,24 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
         encoding="utf-8",
     )
     _write_sanity_report_markdown(Path(outputs["sanity_report_markdown"]), sanity_report)
+    _write_table_csv(Path(outputs["comparison_report_csv"]), method_comparisons, METHOD_COMPARISON_COLUMNS)
+    Path(outputs["comparison_report_json"]).write_text(
+        json.dumps(
+            {
+                "method_comparisons": method_comparisons,
+                "method_comparison_count": len(method_comparisons),
+                "class_comparisons": class_comparisons,
+                "class_comparison_count": len(class_comparisons),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _write_comparison_report_markdown(
+        Path(outputs["comparison_report_markdown"]),
+        method_comparisons=method_comparisons,
+        class_comparisons=class_comparisons,
+    )
     return outputs
 
 
