@@ -27,6 +27,7 @@ DEFAULT_METHODS = (
     "noisy_persistence_pf",
     "constant_velocity",
     "gaussian_rw",
+    "adaptive_gaussian_rw",
     "mlp_delta",
     "history_mlp_delta",
     "gru_delta",

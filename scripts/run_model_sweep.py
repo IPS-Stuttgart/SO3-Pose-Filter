@@ -15,6 +15,7 @@ from pose_filter.experiment import load_config, run_experiment  # noqa: E402
 DEFAULT_MODELS = ("persistence", "gaussian_rw", "learned_delta")
 ALL_MODELS = (
     *DEFAULT_MODELS,
+    "adaptive_gaussian_rw",
     "constant_velocity",
     "mlp_delta",
     "history_mlp_delta",
@@ -37,9 +38,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def run_sweep(
-    config: dict, output_root: Path, models: tuple[str, ...] = DEFAULT_MODELS
-) -> dict:
+def run_sweep(config: dict, output_root: Path, models: tuple[str, ...] = DEFAULT_MODELS) -> dict:
     rows: list[dict[str, Any]] = []
     summaries = {}
     for model in models:
@@ -79,12 +78,8 @@ def run_sweep(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run all transition baselines from one config."
-    )
-    parser.add_argument(
-        "--config", required=True, help="Path to JSON experiment config."
-    )
+    parser = argparse.ArgumentParser(description="Run all transition baselines from one config.")
+    parser.add_argument("--config", required=True, help="Path to JSON experiment config.")
     parser.add_argument(
         "--output",
         default=None,

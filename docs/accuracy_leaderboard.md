@@ -10,6 +10,7 @@ This runs the detector-measurement evaluator once per transition model, then wri
 python scripts/build_accuracy_leaderboard.py \
   --eval-config configs/hmr_measurements.local.json \
   --method gaussian=gaussian_rw:numpy \
+  --method adaptive=adaptive_gaussian_rw:numpy \
   --method cv=constant_velocity:numpy \
   --method mlp=mlp_delta:numpy \
   --method hist=history_mlp_delta:numpy \
@@ -31,6 +32,7 @@ Use this when each transition model has already been evaluated into its own outp
 ```bash
 python scripts/build_accuracy_leaderboard.py \
   --detector-run gaussian=runs/hmr_gaussian_rw \
+  --detector-run adaptive=runs/hmr_adaptive_gaussian_rw \
   --detector-run cv=runs/hmr_constant_velocity \
   --detector-run mlp=runs/hmr_mlp_delta \
   --detector-run hist=runs/hmr_history_mlp_delta \

@@ -162,12 +162,13 @@ jobs:
               "smoother_chordal",
               "savgol_tangent",
               "gaussian_rw",
+              "adaptive_gaussian_rw",
               "pyrecest_pf",
               "mlp_delta",
               "pyrecest_mlp_pf",
               "history_mlp_delta",
           ]
-          assert benchmark_summary["row_count"] == 40
+          assert benchmark_summary["row_count"] == 44
           for smoother in ["smoother_ema", "smoother_chordal", "savgol_tangent"]:
               assert smoother in benchmark_summary["means_by_method"]
           assert benchmark_summary["acceptance"]["target_method"] == "pyrecest_pf"
@@ -181,6 +182,7 @@ jobs:
           assert "mlp_delta" in transition_by_model
           assert "history_mlp_delta" in transition_by_model
           assert "gaussian_rw" in transition_by_model
+          assert "adaptive_gaussian_rw" in transition_by_model
           assert float(transition_by_model["mlp_delta"]["value"]) > 0.0
           assert float(transition_by_model["history_mlp_delta"]["value"]) > 0.0
 

@@ -16,9 +16,7 @@ def _require_torch() -> Any:
     try:
         import torch
     except ImportError as exc:
-        raise ImportError(
-            "gru_delta requires PyTorch. Install the optional torch extra, for example `python -m pip install -e .[torch]`."
-        ) from exc
+        raise ImportError("gru_delta requires PyTorch. Install the optional torch extra, for example `python -m pip install -e .[torch]`.") from exc
     return torch
 
 
@@ -87,9 +85,7 @@ def _stabilize_tangent_delta(
 class TransitionModel:
     name = "base"
 
-    def sample_next(
-        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
-    ) -> np.ndarray:
+    def sample_next(self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None) -> np.ndarray:
         raise NotImplementedError
 
     def deterministic_next(self, x_k: np.ndarray) -> np.ndarray:
@@ -98,9 +94,7 @@ class TransitionModel:
     def log_prob_next(self, x_next: np.ndarray, x_k: np.ndarray) -> np.ndarray | None:
         return None
 
-    def sample_next_from_history(
-        self, history: list[np.ndarray], rng: np.random.Generator
-    ) -> np.ndarray:
+    def sample_next_from_history(self, history: list[np.ndarray], rng: np.random.Generator) -> np.ndarray:
         return self.sample_next(history[-1], rng)
 
     def deterministic_next_from_history(self, history: list[np.ndarray]) -> np.ndarray:
@@ -110,9 +104,7 @@ class TransitionModel:
 class PersistenceTransition(TransitionModel):
     name = "persistence"
 
-    def sample_next(
-        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
-    ) -> np.ndarray:
+    def sample_next(self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None) -> np.ndarray:
         x_k = np.asarray(x_k, dtype=np.float64)
         if n_samples is None:
             return x_k.copy()
@@ -152,9 +144,7 @@ class NoisyPersistenceTransition(TransitionModel):
                 std = min(std, float(max_std_rad))
         return cls(std_delta=np.full((num_joints, 3), std, dtype=np.float64))
 
-    def sample_next(
-        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
-    ) -> np.ndarray:
+    def sample_next(self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None) -> np.ndarray:
         x_k = np.asarray(x_k, dtype=np.float64)
         if n_samples is not None:
             base = np.repeat(x_k[None, ...], n_samples, axis=0)
@@ -201,16 +191,10 @@ class GaussianRandomWalkTransition(TransitionModel):
             std = np.minimum(std, float(max_std_rad))
         return cls(mean_delta=mean, std_delta=std)
 
-    def _sample_delta(
-        self, base_shape: tuple[int, ...], rng: np.random.Generator
-    ) -> np.ndarray:
-        return rng.normal(
-            self.mean_delta, self.std_delta, size=base_shape + self.mean_delta.shape
-        )
+    def _sample_delta(self, base_shape: tuple[int, ...], rng: np.random.Generator) -> np.ndarray:
+        return rng.normal(self.mean_delta, self.std_delta, size=base_shape + self.mean_delta.shape)
 
-    def sample_next(
-        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
-    ) -> np.ndarray:
+    def sample_next(self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None) -> np.ndarray:
         x_k = np.asarray(x_k, dtype=np.float64)
         if n_samples is not None:
             base = np.repeat(x_k[None, ...], n_samples, axis=0)
@@ -227,9 +211,122 @@ class GaussianRandomWalkTransition(TransitionModel):
     def log_prob_next(self, x_next: np.ndarray, x_k: np.ndarray) -> np.ndarray:
         delta = left_delta(x_k, x_next)
         z = (delta - self.mean_delta) / self.std_delta
-        return -0.5 * np.sum(
-            z * z + np.log(2.0 * np.pi * self.std_delta * self.std_delta), axis=(-1, -2)
+        return -0.5 * np.sum(z * z + np.log(2.0 * np.pi * self.std_delta * self.std_delta), axis=(-1, -2))
+
+
+@dataclass
+class AdaptiveGaussianRandomWalkTransition(TransitionModel):
+    """Persistence-centered low-motion transition with a Gaussian RW high-motion gate."""
+
+    mean_delta: np.ndarray
+    std_delta: np.ndarray
+    low_motion_std_delta: np.ndarray
+    motion_threshold_rad: float = np.radians(1.5)
+    history_length: int = field(default=1, init=False)
+
+    name = "adaptive_gaussian_rw"
+
+    @classmethod
+    def fit(
+        cls,
+        sequences: list[PoseSequence],
+        min_std_rad: float = np.radians(0.25),
+        max_std_rad: float | None = None,
+        motion_threshold_deg: float = 1.5,
+        low_motion_process_noise_deg: float = 0.25,
+    ) -> "AdaptiveGaussianRandomWalkTransition":
+        gaussian = GaussianRandomWalkTransition.fit(
+            sequences,
+            min_std_rad=min_std_rad,
+            max_std_rad=max_std_rad,
         )
+        low_std = np.radians(float(low_motion_process_noise_deg))
+        low_std = max(low_std, min_std_rad)
+        if max_std_rad is not None:
+            low_std = min(low_std, float(max_std_rad))
+        return cls(
+            mean_delta=gaussian.mean_delta,
+            std_delta=gaussian.std_delta,
+            low_motion_std_delta=np.full_like(gaussian.std_delta, low_std),
+            motion_threshold_rad=np.radians(float(motion_threshold_deg)),
+        )
+
+    def _sample_gaussian_delta(self, leading_shape: tuple[int, ...], rng: np.random.Generator) -> np.ndarray:
+        return rng.normal(
+            self.mean_delta,
+            self.std_delta,
+            size=leading_shape + self.mean_delta.shape,
+        )
+
+    def _sample_persistence_delta(self, leading_shape: tuple[int, ...], rng: np.random.Generator) -> np.ndarray:
+        return rng.normal(
+            0.0,
+            self.low_motion_std_delta,
+            size=leading_shape + self.low_motion_std_delta.shape,
+        )
+
+    def _low_motion_mask(self, history: list[np.ndarray]) -> np.ndarray:
+        if len(history) < 2:
+            return np.asarray(True)
+        previous = np.asarray(history[-2], dtype=np.float64)
+        current = np.asarray(history[-1], dtype=np.float64)
+        recent_motion = np.mean(geodesic_distance(previous, current), axis=-1)
+        return recent_motion < float(self.motion_threshold_rad)
+
+    def sample_next(self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None) -> np.ndarray:
+        x_k = np.asarray(x_k, dtype=np.float64)
+        if n_samples is not None:
+            base = np.repeat(x_k[None, ...], n_samples, axis=0)
+            delta = self._sample_persistence_delta((n_samples,), rng)
+            return left_apply_delta(delta, base)
+        delta = self._sample_persistence_delta(x_k.shape[:-3], rng)
+        return left_apply_delta(delta, x_k)
+
+    def sample_next_from_history(self, history: list[np.ndarray], rng: np.random.Generator) -> np.ndarray:
+        current = np.asarray(history[-1], dtype=np.float64)
+        leading_shape = current.shape[:-3]
+        low_motion = self._low_motion_mask(history)[..., None, None]
+        persistence_delta = self._sample_persistence_delta(leading_shape, rng)
+        gaussian_delta = self._sample_gaussian_delta(leading_shape, rng)
+        delta = np.where(low_motion, persistence_delta, gaussian_delta)
+        return left_apply_delta(delta, current)
+
+    def deterministic_next(self, x_k: np.ndarray) -> np.ndarray:
+        return np.asarray(x_k, dtype=np.float64).copy()
+
+    def deterministic_next_from_history(self, history: list[np.ndarray]) -> np.ndarray:
+        current = np.asarray(history[-1], dtype=np.float64)
+        leading_shape = current.shape[:-3]
+        low_motion = self._low_motion_mask(history)[..., None, None]
+        persistence_delta = np.zeros(
+            leading_shape + self.mean_delta.shape,
+            dtype=np.float64,
+        )
+        gaussian_delta = np.broadcast_to(
+            self.mean_delta,
+            leading_shape + self.mean_delta.shape,
+        )
+        delta = np.where(low_motion, persistence_delta, gaussian_delta)
+        return left_apply_delta(delta, current)
+
+    def log_prob_next(self, x_next: np.ndarray, x_k: np.ndarray) -> np.ndarray:
+        return self.log_prob_next_from_history(x_next, [x_k])
+
+    def log_prob_next_from_history(self, x_next: np.ndarray, history: list[np.ndarray]) -> np.ndarray:
+        current = np.asarray(history[-1], dtype=np.float64)
+        delta = left_delta(current, x_next)
+        low_motion = self._low_motion_mask(history)
+        low_z = delta / self.low_motion_std_delta
+        low_log_prob = -0.5 * np.sum(
+            low_z * low_z + np.log(2.0 * np.pi * self.low_motion_std_delta * self.low_motion_std_delta),
+            axis=(-1, -2),
+        )
+        high_z = (delta - self.mean_delta) / self.std_delta
+        high_log_prob = -0.5 * np.sum(
+            high_z * high_z + np.log(2.0 * np.pi * self.std_delta * self.std_delta),
+            axis=(-1, -2),
+        )
+        return np.where(low_motion, low_log_prob, high_log_prob)
 
 
 @dataclass
@@ -256,9 +353,7 @@ class LearnedDeltaTransition(TransitionModel):
         reg[-1, -1] = 0.0
         weights = np.linalg.solve(design.T @ design + reg, design.T @ targets)
         residual = targets - design @ weights
-        residual_std = np.maximum(
-            np.std(residual, axis=0).reshape(x.shape[1], 3), min_std_rad
-        )
+        residual_std = np.maximum(np.std(residual, axis=0).reshape(x.shape[1], 3), min_std_rad)
         if max_std_rad is not None:
             residual_std = np.minimum(residual_std, float(max_std_rad))
         return cls(weights=weights, residual_std=residual_std, ridge=ridge)
@@ -270,9 +365,7 @@ class LearnedDeltaTransition(TransitionModel):
         pred = design @ self.weights
         return pred.reshape(x_k.shape[:-2] + (3,))
 
-    def sample_next(
-        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
-    ) -> np.ndarray:
+    def sample_next(self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None) -> np.ndarray:
         x_k = np.asarray(x_k, dtype=np.float64)
         if n_samples is not None:
             base = np.repeat(x_k[None, ...], n_samples, axis=0)
@@ -364,9 +457,7 @@ class MLPDeltaTransition(TransitionModel):
 
         pred = cls._forward_standardized(x_train, w1, b1, w2, b2) * target_std + target_mean
         residual = targets - pred
-        residual_std = np.maximum(
-            np.std(residual, axis=0).reshape(x.shape[1], 3), min_std_rad
-        )
+        residual_std = np.maximum(np.std(residual, axis=0).reshape(x.shape[1], 3), min_std_rad)
         if max_std_rad is not None:
             residual_std = np.minimum(residual_std, float(max_std_rad))
         return cls(
@@ -437,32 +528,24 @@ class MLPDeltaTransition(TransitionModel):
                 grad_b1 = np.sum(grad_z1, axis=0)
                 grads = [grad_w1, grad_b1, grad_w2, grad_b2]
                 step += 1
-                for param, grad, moment, velocity in zip(
-                    params, grads, moments, velocities, strict=True
-                ):
+                for param, grad, moment, velocity in zip(params, grads, moments, velocities, strict=True):
                     moment *= beta1
                     moment += (1.0 - beta1) * grad
                     velocity *= beta2
                     velocity += (1.0 - beta2) * (grad * grad)
                     moment_hat = moment / (1.0 - beta1**step)
                     velocity_hat = velocity / (1.0 - beta2**step)
-                    param -= learning_rate * moment_hat / (
-                        np.sqrt(velocity_hat) + eps
-                    )
+                    param -= learning_rate * moment_hat / (np.sqrt(velocity_hat) + eps)
 
     def _mean_delta(self, x_k: np.ndarray) -> np.ndarray:
         x_k = np.asarray(x_k, dtype=np.float64)
         features = log_map(x_k).reshape(-1, x_k.shape[-3] * 3)
         standardized = (features - self.input_mean) / self.input_std
-        pred = self._forward_standardized(
-            standardized, self.w1, self.b1, self.w2, self.b2
-        )
+        pred = self._forward_standardized(standardized, self.w1, self.b1, self.w2, self.b2)
         delta = pred * self.target_std + self.target_mean
         return delta.reshape(x_k.shape[:-2] + (3,))
 
-    def sample_next(
-        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
-    ) -> np.ndarray:
+    def sample_next(self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None) -> np.ndarray:
         x_k = np.asarray(x_k, dtype=np.float64)
         if n_samples is not None:
             base = np.repeat(x_k[None, ...], n_samples, axis=0)
@@ -598,15 +681,9 @@ class HistoryMLPDeltaTransition(TransitionModel):
             rng=rng,
         )
 
-        pred = (
-            MLPDeltaTransition._forward_standardized(x_train, w1, b1, w2, b2)
-            * target_std
-            + target_mean
-        )
+        pred = MLPDeltaTransition._forward_standardized(x_train, w1, b1, w2, b2) * target_std + target_mean
         residual = targets - pred
-        residual_std = np.maximum(
-            np.std(residual, axis=0).reshape(num_joints, 3), min_std_rad
-        )
+        residual_std = np.maximum(np.std(residual, axis=0).reshape(num_joints, 3), min_std_rad)
         if max_std_rad is not None:
             residual_std = np.minimum(residual_std, float(max_std_rad))
         return cls(
@@ -628,9 +705,7 @@ class HistoryMLPDeltaTransition(TransitionModel):
         )
 
     @staticmethod
-    def _training_examples(
-        sequences: list[PoseSequence], history_length: int
-    ) -> tuple[np.ndarray, np.ndarray, int]:
+    def _training_examples(sequences: list[PoseSequence], history_length: int) -> tuple[np.ndarray, np.ndarray, int]:
         features = []
         targets = []
         num_joints = sequences[0].rotations.shape[1]
@@ -640,9 +715,7 @@ class HistoryMLPDeltaTransition(TransitionModel):
             if rotations.shape[0] < 2:
                 continue
             pose_features = log_map(rotations[:-1]).reshape(rotations.shape[0] - 1, -1)
-            deltas = left_delta(rotations[:-1], rotations[1:]).reshape(
-                rotations.shape[0] - 1, -1
-            )
+            deltas = left_delta(rotations[:-1], rotations[1:]).reshape(rotations.shape[0] - 1, -1)
             for t in range(rotations.shape[0] - 1):
                 history_parts = []
                 for lag in range(1, history_length + 1):
@@ -661,9 +734,7 @@ class HistoryMLPDeltaTransition(TransitionModel):
         parts = [pose]
         for lag in range(1, self.history_length + 1):
             if len(history) > lag:
-                delta = left_delta(history[-lag - 1], history[-lag]).reshape(
-                    -1, num_joints * 3
-                )
+                delta = left_delta(history[-lag - 1], history[-lag]).reshape(-1, num_joints * 3)
                 parts.append(delta)
             else:
                 parts.append(zeros)
@@ -673,23 +744,17 @@ class HistoryMLPDeltaTransition(TransitionModel):
         current = np.asarray(history[-1], dtype=np.float64)
         features = self._features_from_history(history)
         standardized = (features - self.input_mean) / self.input_std
-        pred = MLPDeltaTransition._forward_standardized(
-            standardized, self.w1, self.b1, self.w2, self.b2
-        )
+        pred = MLPDeltaTransition._forward_standardized(standardized, self.w1, self.b1, self.w2, self.b2)
         delta = pred * self.target_std + self.target_mean
         return delta.reshape(current.shape[:-2] + (3,))
 
-    def sample_next(
-        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
-    ) -> np.ndarray:
+    def sample_next(self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None) -> np.ndarray:
         if n_samples is not None:
             base = np.repeat(np.asarray(x_k, dtype=np.float64)[None, ...], n_samples, axis=0)
             return self.sample_next_from_history([base], rng)
         return self.sample_next_from_history([np.asarray(x_k, dtype=np.float64)], rng)
 
-    def sample_next_from_history(
-        self, history: list[np.ndarray], rng: np.random.Generator
-    ) -> np.ndarray:
+    def sample_next_from_history(self, history: list[np.ndarray], rng: np.random.Generator) -> np.ndarray:
         mean = self._mean_delta_from_history(history)
         noise = rng.normal(0.0, self.residual_std, size=mean.shape)
         return left_apply_delta(mean + noise, history[-1])
@@ -703,9 +768,7 @@ class HistoryMLPDeltaTransition(TransitionModel):
     def log_prob_next(self, x_next: np.ndarray, x_k: np.ndarray) -> np.ndarray:
         return self.log_prob_next_from_history(x_next, [x_k])
 
-    def log_prob_next_from_history(
-        self, x_next: np.ndarray, history: list[np.ndarray]
-    ) -> np.ndarray:
+    def log_prob_next_from_history(self, x_next: np.ndarray, history: list[np.ndarray]) -> np.ndarray:
         delta = left_delta(history[-1], x_next)
         mean = self._mean_delta_from_history(history)
         z = (delta - mean) / self.residual_std
@@ -857,16 +920,11 @@ class GRUDeltaTransition(TransitionModel):
                 pred = model(xb)[0].detach().cpu().numpy()
                 predictions.append(pred * target_std + target_mean)
         residual = targets - np.concatenate(predictions, axis=0)
-        residual_std = np.maximum(
-            np.std(residual, axis=0).reshape(num_joints, 3), min_std_rad
-        )
+        residual_std = np.maximum(np.std(residual, axis=0).reshape(num_joints, 3), min_std_rad)
         if max_std_rad is not None:
             residual_std = np.minimum(residual_std, float(max_std_rad))
 
-        state_dict = {
-            key: value.detach().cpu().numpy()
-            for key, value in model.state_dict().items()
-        }
+        state_dict = {key: value.detach().cpu().numpy() for key, value in model.state_dict().items()}
         resolved_device = str(torch_device)
         result = cls(
             input_mean=input_mean,
@@ -917,12 +975,7 @@ class GRUDeltaTransition(TransitionModel):
                 output_dim=int(self.target_mean.shape[0]),
                 num_layers=int(self.num_layers),
             ).to(torch_device)
-            module.load_state_dict(
-                {
-                    key: torch.as_tensor(value, dtype=torch.float32, device=torch_device)
-                    for key, value in self.state_dict.items()
-                }
-            )
+            module.load_state_dict({key: torch.as_tensor(value, dtype=torch.float32, device=torch_device) for key, value in self.state_dict.items()})
             module.eval()
             self._module = module
         return self._module, torch, torch_device
@@ -952,17 +1005,13 @@ class GRUDeltaTransition(TransitionModel):
         )
         return delta.reshape(current.shape[:-2] + (3,))
 
-    def sample_next(
-        self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None
-    ) -> np.ndarray:
+    def sample_next(self, x_k: np.ndarray, rng: np.random.Generator, n_samples: int | None = None) -> np.ndarray:
         if n_samples is not None:
             base = np.repeat(np.asarray(x_k, dtype=np.float64)[None, ...], n_samples, axis=0)
             return self.sample_next_from_history([base], rng)
         return self.sample_next_from_history([np.asarray(x_k, dtype=np.float64)], rng)
 
-    def sample_next_from_history(
-        self, history: list[np.ndarray], rng: np.random.Generator
-    ) -> np.ndarray:
+    def sample_next_from_history(self, history: list[np.ndarray], rng: np.random.Generator) -> np.ndarray:
         mean = self._mean_delta_from_history(history)
         noise = rng.normal(0.0, self.residual_std, size=mean.shape)
         delta = _clip_tangent_delta(mean + noise, self.max_delta_norm_rad)
@@ -977,9 +1026,7 @@ class GRUDeltaTransition(TransitionModel):
     def log_prob_next(self, x_next: np.ndarray, x_k: np.ndarray) -> np.ndarray:
         return self.log_prob_next_from_history(x_next, [x_k])
 
-    def log_prob_next_from_history(
-        self, x_next: np.ndarray, history: list[np.ndarray]
-    ) -> np.ndarray:
+    def log_prob_next_from_history(self, x_next: np.ndarray, history: list[np.ndarray]) -> np.ndarray:
         delta = left_delta(history[-1], x_next)
         mean = self._mean_delta_from_history(history)
         z = (delta - mean) / self.residual_std
@@ -1005,11 +1052,7 @@ class GRUDeltaTransition(TransitionModel):
             "weight_decay": np.asarray(self.weight_decay),
             "seed": np.asarray(self.seed),
             "delta_scale": np.asarray(self.delta_scale),
-            "max_delta_norm_rad": np.asarray(
-                np.nan
-                if self.max_delta_norm_rad is None
-                else self.max_delta_norm_rad
-            ),
+            "max_delta_norm_rad": np.asarray(np.nan if self.max_delta_norm_rad is None else self.max_delta_norm_rad),
             "device": np.asarray(self.device),
             "state_keys": np.asarray(list(self.state_dict), dtype="<U128"),
         }
@@ -1021,21 +1064,14 @@ class GRUDeltaTransition(TransitionModel):
     def load_npz(cls, path: str | Path) -> "GRUDeltaTransition":
         with np.load(Path(path), allow_pickle=False) as data:
             keys = [str(key) for key in np.asarray(data["state_keys"]).tolist()]
-            max_delta_norm_rad = (
-                float(np.asarray(data["max_delta_norm_rad"]).reshape(-1)[0])
-                if "max_delta_norm_rad" in data
-                else float("nan")
-            )
+            max_delta_norm_rad = float(np.asarray(data["max_delta_norm_rad"]).reshape(-1)[0]) if "max_delta_norm_rad" in data else float("nan")
             return cls(
                 input_mean=np.asarray(data["input_mean"], dtype=np.float64),
                 input_std=np.asarray(data["input_std"], dtype=np.float64),
                 target_mean=np.asarray(data["target_mean"], dtype=np.float64),
                 target_std=np.asarray(data["target_std"], dtype=np.float64),
                 residual_std=np.asarray(data["residual_std"], dtype=np.float64),
-                state_dict={
-                    key: np.asarray(data[f"state_{idx}"], dtype=np.float32)
-                    for idx, key in enumerate(keys)
-                },
+                state_dict={key: np.asarray(data[f"state_{idx}"], dtype=np.float32) for idx, key in enumerate(keys)},
                 history_steps=int(np.asarray(data["history_length"]).reshape(-1)[0]),
                 hidden_dim=int(np.asarray(data["hidden_dim"]).reshape(-1)[0]),
                 num_layers=int(np.asarray(data["num_layers"]).reshape(-1)[0]),
@@ -1043,16 +1079,8 @@ class GRUDeltaTransition(TransitionModel):
                 learning_rate=float(np.asarray(data["learning_rate"]).reshape(-1)[0]),
                 weight_decay=float(np.asarray(data["weight_decay"]).reshape(-1)[0]),
                 seed=int(np.asarray(data["seed"]).reshape(-1)[0]),
-                delta_scale=(
-                    float(np.asarray(data["delta_scale"]).reshape(-1)[0])
-                    if "delta_scale" in data
-                    else 1.0
-                ),
-                max_delta_norm_rad=(
-                    None
-                    if np.isnan(max_delta_norm_rad)
-                    else max_delta_norm_rad
-                ),
+                delta_scale=(float(np.asarray(data["delta_scale"]).reshape(-1)[0]) if "delta_scale" in data else 1.0),
+                max_delta_norm_rad=(None if np.isnan(max_delta_norm_rad) else max_delta_norm_rad),
                 device=str(np.asarray(data["device"]).reshape(-1)[0]),
             )
 
@@ -1065,9 +1093,7 @@ def build_transition_model(
 ) -> TransitionModel:
     """Fit or construct a transition model by config name."""
     config = {} if config is None else config
-    max_std_rad = (
-        None if process_noise_deg is None else np.radians(float(process_noise_deg))
-    )
+    max_std_rad = None if process_noise_deg is None else np.radians(float(process_noise_deg))
     if name == "persistence":
         return PersistenceTransition()
     if name == "deterministic_persistence":
@@ -1075,16 +1101,17 @@ def build_transition_model(
     if name == "noisy_persistence":
         return NoisyPersistenceTransition.from_sequences(
             train_sequences,
-            std_rad=(
-                None
-                if config.get("noisy_persistence_process_noise_deg") is None
-                else np.radians(float(config["noisy_persistence_process_noise_deg"]))
-            ),
+            std_rad=(None if config.get("noisy_persistence_process_noise_deg") is None else np.radians(float(config["noisy_persistence_process_noise_deg"]))),
             max_std_rad=max_std_rad,
         )
     if name == "gaussian_rw":
-        return GaussianRandomWalkTransition.fit(
-            train_sequences, max_std_rad=max_std_rad
+        return GaussianRandomWalkTransition.fit(train_sequences, max_std_rad=max_std_rad)
+    if name == "adaptive_gaussian_rw":
+        return AdaptiveGaussianRandomWalkTransition.fit(
+            train_sequences,
+            max_std_rad=max_std_rad,
+            motion_threshold_deg=float(config.get("adaptive_motion_threshold_deg", 1.5)),
+            low_motion_process_noise_deg=float(config.get("adaptive_low_motion_process_noise_deg", 0.25)),
         )
     if name == "learned_delta":
         return LearnedDeltaTransition.fit(train_sequences, max_std_rad=max_std_rad)
@@ -1108,9 +1135,7 @@ def build_transition_model(
             model.save_npz(Path(checkpoint))
         return model
     if name == "history_mlp_delta":
-        checkpoint = config.get(
-            "history_transition_checkpoint", config.get("transition_checkpoint")
-        )
+        checkpoint = config.get("history_transition_checkpoint", config.get("transition_checkpoint"))
         if checkpoint and bool(config.get("transition_load_checkpoint", False)):
             checkpoint_path = Path(checkpoint)
             if checkpoint_path.exists():
@@ -1130,9 +1155,7 @@ def build_transition_model(
             history_model.save_npz(Path(checkpoint))
         return history_model
     if name == "gru_delta":
-        checkpoint = config.get(
-            "gru_transition_checkpoint", config.get("transition_checkpoint")
-        )
+        checkpoint = config.get("gru_transition_checkpoint", config.get("transition_checkpoint"))
         if checkpoint and bool(config.get("transition_load_checkpoint", False)):
             checkpoint_path = Path(checkpoint)
             if checkpoint_path.exists():
@@ -1150,11 +1173,7 @@ def build_transition_model(
             device=str(config.get("gru_device", "auto")),
             max_std_rad=max_std_rad,
             delta_scale=float(config.get("gru_delta_scale", 1.0)),
-            max_delta_norm_rad=(
-                None
-                if gru_max_delta_deg is None
-                else np.radians(float(gru_max_delta_deg))
-            ),
+            max_delta_norm_rad=(None if gru_max_delta_deg is None else np.radians(float(gru_max_delta_deg))),
         )
         if checkpoint and bool(config.get("transition_save_checkpoint", True)):
             gru_model.save_npz(Path(checkpoint))
@@ -1179,9 +1198,7 @@ def one_step_error_deg(model: TransitionModel, sequences: list[PoseSequence]) ->
     return float(np.degrees(np.mean(np.concatenate(vals))))
 
 
-def rollout_error_deg(
-    model: TransitionModel, sequences: list[PoseSequence], horizon: int
-) -> float:
+def rollout_error_deg(model: TransitionModel, sequences: list[PoseSequence], horizon: int) -> float:
     """Mean deterministic rollout error in degrees over a fixed horizon."""
     errors = []
     horizon = int(horizon)

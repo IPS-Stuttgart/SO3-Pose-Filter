@@ -77,7 +77,7 @@ python scripts/prepare_amass_windows.py \
 python scripts/run_model_sweep.py \
   --config configs/accad_dynamic.example.json \
   --output runs/accad_dynamic_sweep \
-  --models persistence gaussian_rw learned_delta mlp_delta history_mlp_delta gru_delta
+  --models persistence gaussian_rw adaptive_gaussian_rw learned_delta mlp_delta history_mlp_delta gru_delta
 
 python scripts/run_first_results_benchmark.py \
   --config configs/accad_dynamic_benchmark.example.json \
