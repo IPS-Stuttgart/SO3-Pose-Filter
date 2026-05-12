@@ -197,6 +197,13 @@ jobs:
           test -s "$OUTPUT_DIR/accuracy_leaderboard_paper_summary.tex"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_sanity_report.json"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_sanity_report.md"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_method_comparisons.csv"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_class_comparisons.csv"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_comparison_report.json"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_comparison_report.md"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_claim_candidates.csv"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_claim_candidates.json"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_claim_candidates.md"
           python - <<'PY'
           import json
           import os
@@ -209,8 +216,56 @@ jobs:
           summary = json.loads((output_dir / "accuracy_leaderboard_paper_summary.json").read_text(encoding="utf-8"))
           if int(summary.get("row_count", 0)) <= 0:
               raise SystemExit("accuracy_leaderboard_paper_summary.json has no rows")
-          print(json.dumps({"row_count": payload["row_count"], "paper_summary_row_count": summary["row_count"]}, indent=2))
+          comparisons = json.loads((output_dir / "accuracy_leaderboard_comparison_report.json").read_text(encoding="utf-8"))
+          if int(comparisons.get("method_comparison_count", 0)) <= 0:
+              raise SystemExit("accuracy_leaderboard_comparison_report.json has no method comparisons")
+          claims = json.loads((output_dir / "accuracy_leaderboard_claim_candidates.json").read_text(encoding="utf-8"))
+          if int(claims.get("row_count", 0)) <= 0:
+              raise SystemExit("accuracy_leaderboard_claim_candidates.json has no claim candidates")
+          print(json.dumps({
+              "row_count": payload["row_count"],
+              "paper_summary_row_count": summary["row_count"],
+              "method_comparison_count": comparisons["method_comparison_count"],
+              "class_comparison_count": comparisons["class_comparison_count"],
+              "claim_candidate_count": claims["row_count"],
+          }, indent=2))
           PY
+
+      - name: Write accuracy leaderboard job summary
+        if: always()
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "$OUTPUT_DIR" ]; then
+            echo "No leaderboard output directory was produced." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "## Accuracy leaderboard"
+            echo
+            echo "Generated files:"
+            echo
+            find "$OUTPUT_DIR" -maxdepth 1 -type f -printf "- %f\n" | sort
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for report in \
+            accuracy_leaderboard_claim_candidates.md \
+            accuracy_leaderboard_comparison_report.md \
+            accuracy_leaderboard_sanity_report.md
+          do
+            if [ -s "$OUTPUT_DIR/$report" ]; then
+              {
+                echo
+                echo "<details><summary>${report}</summary>"
+                echo
+                cat "$OUTPUT_DIR/$report"
+                echo
+                echo "</details>"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
       - name: Upload accuracy leaderboard
         uses: actions/upload-artifact@v7

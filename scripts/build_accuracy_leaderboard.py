@@ -39,6 +39,7 @@ import copy
 import csv
 import json
 import math
+import random
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -76,6 +77,7 @@ LEADERBOARD_COLUMNS = [
     "noise_deg",
     "occlusion_prob",
     "method",
+    "method_class",
     "transition_model",
     "filter_backend",
     "num_particles",
@@ -97,6 +99,7 @@ PAPER_SUMMARY_COLUMNS = [
     "source",
     "motion_bin",
     "method",
+    "method_class",
     "condition_count",
     "win_count",
     "mean_tracking_error_deg",
@@ -111,6 +114,74 @@ PAPER_SUMMARY_COLUMNS = [
 
 RAW_METHODS = {"raw", "raw_measurement"}
 PERSISTENCE_METHODS = {"persistence", "deterministic_persistence_pf"}
+OFFLINE_SMOOTHER_METHODS = {"smoother_ema", "smoother_chordal", "savgol_tangent"}
+CANONICAL_COMPARISON_BASELINES = ["raw", "raw_measurement", "persistence", "savgol_tangent"]
+
+METHOD_COMPARISON_COLUMNS = [
+    "dataset",
+    "source",
+    "motion_bin",
+    "target_method",
+    "target_method_class",
+    "baseline_method",
+    "baseline_method_class",
+    "condition_count",
+    "target_mean_tracking_error_deg",
+    "baseline_mean_tracking_error_deg",
+    "mean_improvement_deg",
+    "median_improvement_deg",
+    "ci95_low_deg",
+    "ci95_high_deg",
+    "win_count",
+    "loss_count",
+    "tie_count",
+    "win_rate",
+    "sign_test_p_value",
+]
+
+CLASS_COMPARISON_COLUMNS = [
+    "dataset",
+    "source",
+    "motion_bin",
+    "target_class",
+    "baseline_class",
+    "condition_count",
+    "target_best_mean_tracking_error_deg",
+    "baseline_best_mean_tracking_error_deg",
+    "mean_improvement_deg",
+    "median_improvement_deg",
+    "ci95_low_deg",
+    "ci95_high_deg",
+    "win_count",
+    "loss_count",
+    "tie_count",
+    "win_rate",
+    "sign_test_p_value",
+    "target_best_methods",
+    "baseline_best_methods",
+]
+
+CLAIM_CANDIDATE_COLUMNS = [
+    "dataset",
+    "source",
+    "motion_bin",
+    "target_class",
+    "baseline_class",
+    "evidence",
+    "condition_count",
+    "mean_improvement_deg",
+    "median_improvement_deg",
+    "ci95_low_deg",
+    "ci95_high_deg",
+    "win_count",
+    "loss_count",
+    "tie_count",
+    "win_rate",
+    "sign_test_p_value",
+    "target_best_methods",
+    "baseline_best_methods",
+    "claim_sentence",
+]
 
 
 @dataclass(frozen=True)
@@ -225,6 +296,7 @@ def _write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
         "noise",
         "occlusion",
         "method",
+        "class",
         "tracking (deg)",
         "visible",
         "occluded",
@@ -243,6 +315,7 @@ def _write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
         "noise_deg",
         "occlusion_prob",
         "method",
+        "method_class",
         "tracking_error_deg",
         "visible_error_deg",
         "occluded_error_deg",
@@ -296,6 +369,7 @@ def _write_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "noise_deg",
         "occlusion_prob",
         "method",
+        "method_class",
         "tracking_error_deg",
         "visible_error_deg",
         "occluded_error_deg",
@@ -311,6 +385,7 @@ def _write_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "Noise",
         "Occl. prob.",
         "Method",
+        "Class",
         "Track.",
         "Vis.",
         "Occl.",
@@ -323,7 +398,7 @@ def _write_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         r"\centering",
         r"\caption{Accuracy leaderboard. Lower tracking error is better. Positive improvements indicate lower error than the baseline.}",
         r"\label{tab:accuracy-leaderboard}",
-        r"\begin{tabular}{rllllllrrrrrr}",
+        r"\begin{tabular}{rlllllllrrrrrr}",
         r"\toprule",
         " & ".join(headers) + r" \\",
         r"\midrule",
@@ -346,6 +421,13 @@ def _standard_outputs(output_dir: Path) -> dict[str, str]:
         "paper_summary_latex": str(output_dir / "accuracy_leaderboard_paper_summary.tex"),
         "sanity_report_json": str(output_dir / "accuracy_leaderboard_sanity_report.json"),
         "sanity_report_markdown": str(output_dir / "accuracy_leaderboard_sanity_report.md"),
+        "comparison_report_csv": str(output_dir / "accuracy_leaderboard_method_comparisons.csv"),
+        "class_comparisons_csv": str(output_dir / "accuracy_leaderboard_class_comparisons.csv"),
+        "comparison_report_json": str(output_dir / "accuracy_leaderboard_comparison_report.json"),
+        "comparison_report_markdown": str(output_dir / "accuracy_leaderboard_comparison_report.md"),
+        "claim_candidates_csv": str(output_dir / "accuracy_leaderboard_claim_candidates.csv"),
+        "claim_candidates_json": str(output_dir / "accuracy_leaderboard_claim_candidates.json"),
+        "claim_candidates_markdown": str(output_dir / "accuracy_leaderboard_claim_candidates.md"),
     }
 
 
@@ -666,7 +748,8 @@ def _rank_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             previous_group = group
         else:
             rank += 1
-        ranked.append({"rank": rank, **row})
+        method_class = str(row.get("method_class", "")) or _method_class(row)
+        ranked.append({"rank": rank, **row, "method_class": method_class})
     return ranked
 
 
@@ -697,6 +780,359 @@ def _sum_row_counts(rows: list[dict[str, Any]]) -> int | str:
     return int(sum(numeric))
 
 
+def _median(values: list[float]) -> float:
+    if not values:
+        return float("nan")
+    sorted_values = sorted(values)
+    middle = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return float(sorted_values[middle])
+    return float((sorted_values[middle - 1] + sorted_values[middle]) / 2.0)
+
+
+def _stable_seed(parts: Iterable[Any]) -> int:
+    payload = json.dumps([str(part) for part in parts], sort_keys=True)
+    seed = 0
+    for index, char in enumerate(payload, start=1):
+        seed = (seed + index * ord(char)) % (2**32)
+    return seed
+
+
+def _bootstrap_mean_ci(
+    values: list[float],
+    *,
+    seed_parts: Iterable[Any],
+    iterations: int = 2000,
+) -> tuple[float, float]:
+    if not values:
+        return float("nan"), float("nan")
+    if len(values) == 1:
+        return float(values[0]), float(values[0])
+    rng = random.Random(_stable_seed(seed_parts))  # nosec B311
+    sample_count = len(values)
+    means = []
+    for _ in range(iterations):
+        sample = [values[rng.randrange(sample_count)] for _ in range(sample_count)]
+        means.append(sum(sample) / sample_count)
+    means.sort()
+    low_index = int(0.025 * (iterations - 1))
+    high_index = int(0.975 * (iterations - 1))
+    return float(means[low_index]), float(means[high_index])
+
+
+def _method_class(row: dict[str, Any] | None) -> str:
+    if row is None:
+        return ""
+    explicit = str(row.get("method_class", ""))
+    if explicit:
+        return explicit
+    method = str(row.get("method", ""))
+    backend = str(row.get("filter_backend", ""))
+    if method in RAW_METHODS:
+        return "raw_measurement"
+    if method in PERSISTENCE_METHODS:
+        return "causal_baseline"
+    if backend == "offline_smoother" or method in OFFLINE_SMOOTHER_METHODS:
+        return "offline_smoother"
+    if backend in {"numpy", "pyrecest"}:
+        return "causal_online_filter"
+    if method in {"gaussian_rw", "constant_velocity", "mlp_delta", "history_mlp_delta", "gru_delta", "learned_proposal"}:
+        return "causal_online_filter"
+    return "other"
+
+
+def _context_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("dataset", "")),
+        str(row.get("source", "")),
+        str(row.get("motion_bin", "")),
+    )
+
+
+def _condition_method_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str, str, str], dict[str, dict[str, Any]]]:
+    out: dict[tuple[str, str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in rows:
+        method = str(row.get("method", ""))
+        tracking = _float_or_nan(row.get("tracking_error_deg"))
+        if not method or not math.isfinite(tracking):
+            continue
+        out[_condition_key(row)].setdefault(method, row)
+    return out
+
+
+def _method_count_summary(methods: Iterable[str]) -> str:
+    counts: dict[str, int] = defaultdict(int)
+    for method in methods:
+        counts[method] += 1
+    return ";".join(f"{method}:{count}" for method, count in sorted(counts.items()))
+
+
+def _comparison_counts(differences: list[float]) -> tuple[int, int, int, float]:
+    epsilon = 1e-9
+    win_count = sum(1 for value in differences if value > epsilon)
+    loss_count = sum(1 for value in differences if value < -epsilon)
+    tie_count = len(differences) - win_count - loss_count
+    win_rate = float(win_count / len(differences)) if differences else float("nan")
+    return win_count, loss_count, tie_count, win_rate
+
+
+def _two_sided_sign_test_p_value(win_count: int, loss_count: int) -> float:
+    trial_count = win_count + loss_count
+    if trial_count == 0:
+        return float("nan")
+    tail_count = min(win_count, loss_count)
+    tail_probability = sum(math.comb(trial_count, k) for k in range(tail_count + 1)) / float(2**trial_count)
+    return min(1.0, 2.0 * tail_probability)
+
+
+def build_method_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    condition_rows = _condition_method_lookup(rows)
+    context_conditions: dict[tuple[str, str, str], list[tuple[str, str, str, str, str]]] = defaultdict(list)
+    context_methods: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    for condition_key, methods in condition_rows.items():
+        context_key = condition_key[:3]
+        context_conditions[context_key].append(condition_key)
+        context_methods[context_key].update(methods)
+
+    comparison_rows = []
+    for context_key, available_methods in sorted(context_methods.items()):
+        dataset, source, motion_bin = context_key
+        baselines = [method for method in CANONICAL_COMPARISON_BASELINES if method in available_methods]
+        targets = sorted(method for method in available_methods if method not in RAW_METHODS and method not in PERSISTENCE_METHODS)
+        for target in targets:
+            for baseline in baselines:
+                if target == baseline:
+                    continue
+                differences = []
+                target_errors = []
+                baseline_errors = []
+                target_class = ""
+                baseline_class = ""
+                for condition_key in sorted(context_conditions[context_key]):
+                    condition_methods = condition_rows[condition_key]
+                    target_row = condition_methods.get(target)
+                    baseline_row = condition_methods.get(baseline)
+                    if target_row is None or baseline_row is None:
+                        continue
+                    target_error = _float_or_nan(target_row.get("tracking_error_deg"))
+                    baseline_error = _float_or_nan(baseline_row.get("tracking_error_deg"))
+                    if not math.isfinite(target_error) or not math.isfinite(baseline_error):
+                        continue
+                    target_errors.append(target_error)
+                    baseline_errors.append(baseline_error)
+                    differences.append(baseline_error - target_error)
+                    target_class = target_class or _method_class(target_row)
+                    baseline_class = baseline_class or _method_class(baseline_row)
+                if not differences:
+                    continue
+                ci_low, ci_high = _bootstrap_mean_ci(
+                    differences,
+                    seed_parts=(*context_key, target, baseline),
+                )
+                win_count, loss_count, tie_count, win_rate = _comparison_counts(differences)
+                sign_test_p_value = _two_sided_sign_test_p_value(win_count, loss_count)
+                comparison_rows.append(
+                    {
+                        "dataset": dataset,
+                        "source": source,
+                        "motion_bin": motion_bin,
+                        "target_method": target,
+                        "target_method_class": target_class,
+                        "baseline_method": baseline,
+                        "baseline_method_class": baseline_class,
+                        "condition_count": len(differences),
+                        "target_mean_tracking_error_deg": _nanmean(target_errors),
+                        "baseline_mean_tracking_error_deg": _nanmean(baseline_errors),
+                        "mean_improvement_deg": _nanmean(differences),
+                        "median_improvement_deg": _median(differences),
+                        "ci95_low_deg": ci_low,
+                        "ci95_high_deg": ci_high,
+                        "win_count": win_count,
+                        "loss_count": loss_count,
+                        "tie_count": tie_count,
+                        "win_rate": win_rate,
+                        "sign_test_p_value": sign_test_p_value,
+                    }
+                )
+    return sorted(
+        comparison_rows,
+        key=lambda row: (
+            str(row.get("dataset", "")),
+            str(row.get("source", "")),
+            str(row.get("motion_bin", "")),
+            str(row.get("baseline_method", "")),
+            -_float_or_nan(row.get("mean_improvement_deg")),
+            str(row.get("target_method", "")),
+        ),
+    )
+
+
+def build_class_comparisons(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    class_pairs = [
+        ("causal_online_filter", "offline_smoother"),
+        ("causal_online_filter", "causal_baseline"),
+        ("causal_online_filter", "raw_measurement"),
+        ("offline_smoother", "causal_baseline"),
+    ]
+    condition_rows = _condition_method_lookup(rows)
+    context_conditions: dict[tuple[str, str, str], list[tuple[str, str, str, str, str]]] = defaultdict(list)
+    for condition_key in condition_rows:
+        context_conditions[condition_key[:3]].append(condition_key)
+
+    comparison_rows = []
+    for context_key, condition_keys in sorted(context_conditions.items()):
+        dataset, source, motion_bin = context_key
+        for target_class, baseline_class in class_pairs:
+            differences = []
+            target_errors = []
+            baseline_errors = []
+            target_methods = []
+            baseline_methods = []
+            for condition_key in sorted(condition_keys):
+                grouped_by_class: dict[str, list[dict[str, Any]]] = defaultdict(list)
+                for row in condition_rows[condition_key].values():
+                    grouped_by_class[_method_class(row)].append(row)
+                target_candidates = grouped_by_class.get(target_class, [])
+                baseline_candidates = grouped_by_class.get(baseline_class, [])
+                if not target_candidates or not baseline_candidates:
+                    continue
+                target_row = min(target_candidates, key=lambda row: _float_or_nan(row.get("tracking_error_deg")))
+                baseline_row = min(baseline_candidates, key=lambda row: _float_or_nan(row.get("tracking_error_deg")))
+                target_error = _float_or_nan(target_row.get("tracking_error_deg"))
+                baseline_error = _float_or_nan(baseline_row.get("tracking_error_deg"))
+                if not math.isfinite(target_error) or not math.isfinite(baseline_error):
+                    continue
+                target_errors.append(target_error)
+                baseline_errors.append(baseline_error)
+                differences.append(baseline_error - target_error)
+                target_methods.append(str(target_row.get("method", "")))
+                baseline_methods.append(str(baseline_row.get("method", "")))
+            if not differences:
+                continue
+            ci_low, ci_high = _bootstrap_mean_ci(
+                differences,
+                seed_parts=(*context_key, target_class, baseline_class),
+            )
+            win_count, loss_count, tie_count, win_rate = _comparison_counts(differences)
+            sign_test_p_value = _two_sided_sign_test_p_value(win_count, loss_count)
+            comparison_rows.append(
+                {
+                    "dataset": dataset,
+                    "source": source,
+                    "motion_bin": motion_bin,
+                    "target_class": target_class,
+                    "baseline_class": baseline_class,
+                    "condition_count": len(differences),
+                    "target_best_mean_tracking_error_deg": _nanmean(target_errors),
+                    "baseline_best_mean_tracking_error_deg": _nanmean(baseline_errors),
+                    "mean_improvement_deg": _nanmean(differences),
+                    "median_improvement_deg": _median(differences),
+                    "ci95_low_deg": ci_low,
+                    "ci95_high_deg": ci_high,
+                    "win_count": win_count,
+                    "loss_count": loss_count,
+                    "tie_count": tie_count,
+                    "win_rate": win_rate,
+                    "sign_test_p_value": sign_test_p_value,
+                    "target_best_methods": _method_count_summary(target_methods),
+                    "baseline_best_methods": _method_count_summary(baseline_methods),
+                }
+            )
+    return comparison_rows
+
+
+def _evidence_label(row: dict[str, Any]) -> str:
+    condition_count = int(row.get("condition_count", 0))
+    mean_improvement = _float_or_nan(row.get("mean_improvement_deg"))
+    ci_low = _float_or_nan(row.get("ci95_low_deg"))
+    win_rate = _float_or_nan(row.get("win_rate"))
+    win_count = int(row.get("win_count", 0))
+    loss_count = int(row.get("loss_count", 0))
+    if condition_count < 2:
+        return "insufficient"
+    if math.isfinite(ci_low) and ci_low > 0.0 and win_rate >= 0.75:
+        return "strong_positive"
+    if math.isfinite(mean_improvement) and mean_improvement > 0.0 and win_count > loss_count:
+        return "positive"
+    if math.isfinite(mean_improvement) and mean_improvement > 0.0:
+        return "mixed_positive"
+    if loss_count > win_count:
+        return "negative"
+    return "mixed"
+
+
+def _claim_sentence(row: dict[str, Any], evidence: str) -> str:
+    target = str(row.get("target_class", "")).replace("_", " ")
+    baseline = str(row.get("baseline_class", "")).replace("_", " ")
+    condition_count = row.get("condition_count", "")
+    mean_improvement = _format_float(row.get("mean_improvement_deg"))
+    ci_low = _format_float(row.get("ci95_low_deg"))
+    ci_high = _format_float(row.get("ci95_high_deg"))
+    win_rate = _format_float(row.get("win_rate"))
+    sign_test_p = _format_float(row.get("sign_test_p_value"))
+    target_methods = str(row.get("target_best_methods", ""))
+    baseline_methods = str(row.get("baseline_best_methods", ""))
+    return (
+        f"{target} versus {baseline}: {evidence}; mean paired improvement "
+        f"{mean_improvement} deg over {condition_count} matched conditions "
+        f"(win rate {win_rate}, sign-test p={sign_test_p}, 95% CI [{ci_low}, {ci_high}]). "
+        f"Target best methods: {target_methods or 'n/a'}. "
+        f"Baseline best methods: {baseline_methods or 'n/a'}."
+    )
+
+
+def build_claim_candidates(class_comparisons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    relevant_baselines = {"raw_measurement", "causal_baseline", "offline_smoother"}
+    candidates = []
+    for row in class_comparisons:
+        if row.get("target_class") != "causal_online_filter":
+            continue
+        if row.get("baseline_class") not in relevant_baselines:
+            continue
+        evidence = _evidence_label(row)
+        candidates.append(
+            {
+                "dataset": row.get("dataset", ""),
+                "source": row.get("source", ""),
+                "motion_bin": row.get("motion_bin", ""),
+                "target_class": row.get("target_class", ""),
+                "baseline_class": row.get("baseline_class", ""),
+                "evidence": evidence,
+                "condition_count": row.get("condition_count", ""),
+                "mean_improvement_deg": row.get("mean_improvement_deg", ""),
+                "median_improvement_deg": row.get("median_improvement_deg", ""),
+                "ci95_low_deg": row.get("ci95_low_deg", ""),
+                "ci95_high_deg": row.get("ci95_high_deg", ""),
+                "win_count": row.get("win_count", ""),
+                "loss_count": row.get("loss_count", ""),
+                "tie_count": row.get("tie_count", ""),
+                "win_rate": row.get("win_rate", ""),
+                "sign_test_p_value": row.get("sign_test_p_value", ""),
+                "target_best_methods": row.get("target_best_methods", ""),
+                "baseline_best_methods": row.get("baseline_best_methods", ""),
+                "claim_sentence": _claim_sentence(row, evidence),
+            }
+        )
+    evidence_order = {
+        "strong_positive": 0,
+        "positive": 1,
+        "mixed_positive": 2,
+        "mixed": 3,
+        "insufficient": 4,
+        "negative": 5,
+    }
+    return sorted(
+        candidates,
+        key=lambda row: (
+            str(row.get("dataset", "")),
+            str(row.get("source", "")),
+            str(row.get("motion_bin", "")),
+            evidence_order.get(str(row.get("evidence", "")), 99),
+            str(row.get("baseline_class", "")),
+        ),
+    )
+
+
 def build_paper_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     condition_groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     paper_groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -724,6 +1160,7 @@ def build_paper_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "source": source,
                 "motion_bin": motion_bin,
                 "method": method,
+                "method_class": _method_class(group_rows[0]),
                 "condition_count": condition_count,
                 "win_count": win_counts.get(key, 0),
                 "mean_tracking_error_deg": _nanmean(row.get("tracking_error_deg") for row in group_rows),
@@ -866,6 +1303,7 @@ def _write_paper_summary_markdown(path: Path, rows: list[dict[str, Any]]) -> Non
         "dataset",
         "motion bin",
         "method",
+        "class",
         "conditions",
         "wins",
         "tracking (deg)",
@@ -878,6 +1316,7 @@ def _write_paper_summary_markdown(path: Path, rows: list[dict[str, Any]]) -> Non
         "dataset",
         "motion_bin",
         "method",
+        "method_class",
         "condition_count",
         "win_count",
         "mean_tracking_error_deg",
@@ -906,6 +1345,7 @@ def _write_paper_summary_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "dataset",
         "motion_bin",
         "method",
+        "method_class",
         "condition_count",
         "win_count",
         "mean_tracking_error_deg",
@@ -916,6 +1356,7 @@ def _write_paper_summary_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         "Dataset",
         "Motion bin",
         "Method",
+        "Class",
         "Cond.",
         "Wins",
         "Track.",
@@ -927,7 +1368,7 @@ def _write_paper_summary_latex(path: Path, rows: list[dict[str, Any]]) -> None:
         r"\centering",
         r"\caption{Paper summary of the accuracy leaderboard, aggregated across noise and occlusion conditions.}",
         r"\label{tab:accuracy-leaderboard-paper-summary}",
-        r"\begin{tabular}{lllrrrrr}",
+        r"\begin{tabular}{llllrrrrr}",
         r"\toprule",
         " & ".join(headers) + r" \\",
         r"\midrule",
@@ -993,6 +1434,115 @@ def _write_sanity_report_markdown(path: Path, report: dict[str, Any]) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _write_comparison_report_markdown(
+    path: Path,
+    *,
+    method_comparisons: list[dict[str, Any]],
+    class_comparisons: list[dict[str, Any]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Accuracy leaderboard comparison report",
+        "",
+        "Positive improvements mean the target has lower tracking error than the baseline on matched conditions.",
+        "Intervals are deterministic bootstrap percentile intervals over matched noise/occlusion conditions. The sign-test p-value is an exact two-sided paired sign test that ignores ties.",
+        "",
+        "## Method Comparisons",
+        "",
+        "| dataset | motion bin | target | target class | baseline | baseline class | conditions | mean improvement | 95% CI | wins | losses | win rate | sign-test p |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in method_comparisons:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _escape_markdown(row.get("dataset", "")),
+                    _escape_markdown(row.get("motion_bin", "")),
+                    _escape_markdown(row.get("target_method", "")),
+                    _escape_markdown(row.get("target_method_class", "")),
+                    _escape_markdown(row.get("baseline_method", "")),
+                    _escape_markdown(row.get("baseline_method_class", "")),
+                    _escape_markdown(row.get("condition_count", "")),
+                    _escape_markdown(row.get("mean_improvement_deg", "")),
+                    f"[{_escape_markdown(row.get('ci95_low_deg', ''))}, {_escape_markdown(row.get('ci95_high_deg', ''))}]",
+                    _escape_markdown(row.get("win_count", "")),
+                    _escape_markdown(row.get("loss_count", "")),
+                    _escape_markdown(row.get("win_rate", "")),
+                    _escape_markdown(row.get("sign_test_p_value", "")),
+                ]
+            )
+            + " |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Class Comparisons",
+            "",
+            "| dataset | motion bin | target class | baseline class | conditions | mean improvement | 95% CI | wins | losses | win rate | sign-test p | target best methods | baseline best methods |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in class_comparisons:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _escape_markdown(row.get("dataset", "")),
+                    _escape_markdown(row.get("motion_bin", "")),
+                    _escape_markdown(row.get("target_class", "")),
+                    _escape_markdown(row.get("baseline_class", "")),
+                    _escape_markdown(row.get("condition_count", "")),
+                    _escape_markdown(row.get("mean_improvement_deg", "")),
+                    f"[{_escape_markdown(row.get('ci95_low_deg', ''))}, {_escape_markdown(row.get('ci95_high_deg', ''))}]",
+                    _escape_markdown(row.get("win_count", "")),
+                    _escape_markdown(row.get("loss_count", "")),
+                    _escape_markdown(row.get("win_rate", "")),
+                    _escape_markdown(row.get("sign_test_p_value", "")),
+                    _escape_markdown(row.get("target_best_methods", "")),
+                    _escape_markdown(row.get("baseline_best_methods", "")),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_claim_candidates_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Accuracy leaderboard claim candidates",
+        "",
+        "These are paper-facing claim checks derived from paired class comparisons. They are not SOTA claims; they summarize whether the current evidence supports a cautious within-benchmark statement.",
+        "",
+        "| dataset | motion bin | baseline class | evidence | mean improvement | 95% CI | wins | losses | sign-test p | claim sentence |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _escape_markdown(row.get("dataset", "")),
+                    _escape_markdown(row.get("motion_bin", "")),
+                    _escape_markdown(row.get("baseline_class", "")),
+                    _escape_markdown(row.get("evidence", "")),
+                    _escape_markdown(row.get("mean_improvement_deg", "")),
+                    f"[{_escape_markdown(row.get('ci95_low_deg', ''))}, {_escape_markdown(row.get('ci95_high_deg', ''))}]",
+                    _escape_markdown(row.get("win_count", "")),
+                    _escape_markdown(row.get("loss_count", "")),
+                    _escape_markdown(row.get("sign_test_p_value", "")),
+                    _escape_markdown(row.get("claim_sentence", "")),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def build_leaderboard(
     *,
     detector_runs: list[DetectorRunSpec],
@@ -1014,6 +1564,9 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
     outputs = _standard_outputs(output_dir)
     paper_summary = build_paper_summary(rows)
     sanity_report = build_sanity_report(rows, paper_summary)
+    method_comparisons = build_method_comparisons(rows)
+    class_comparisons = build_class_comparisons(rows)
+    claim_candidates = build_claim_candidates(class_comparisons)
     _write_csv(Path(outputs["csv"]), rows)
     Path(outputs["json"]).write_text(
         json.dumps(
@@ -1022,6 +1575,9 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
                 "row_count": len(rows),
                 "paper_summary": paper_summary,
                 "sanity_report": sanity_report,
+                "method_comparisons": method_comparisons,
+                "class_comparisons": class_comparisons,
+                "claim_candidates": claim_candidates,
             },
             indent=2,
         ),
@@ -1041,6 +1597,31 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
         encoding="utf-8",
     )
     _write_sanity_report_markdown(Path(outputs["sanity_report_markdown"]), sanity_report)
+    _write_table_csv(Path(outputs["comparison_report_csv"]), method_comparisons, METHOD_COMPARISON_COLUMNS)
+    _write_table_csv(Path(outputs["class_comparisons_csv"]), class_comparisons, CLASS_COMPARISON_COLUMNS)
+    Path(outputs["comparison_report_json"]).write_text(
+        json.dumps(
+            {
+                "method_comparisons": method_comparisons,
+                "method_comparison_count": len(method_comparisons),
+                "class_comparisons": class_comparisons,
+                "class_comparison_count": len(class_comparisons),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _write_comparison_report_markdown(
+        Path(outputs["comparison_report_markdown"]),
+        method_comparisons=method_comparisons,
+        class_comparisons=class_comparisons,
+    )
+    _write_table_csv(Path(outputs["claim_candidates_csv"]), claim_candidates, CLAIM_CANDIDATE_COLUMNS)
+    Path(outputs["claim_candidates_json"]).write_text(
+        json.dumps({"rows": claim_candidates, "row_count": len(claim_candidates)}, indent=2),
+        encoding="utf-8",
+    )
+    _write_claim_candidates_markdown(Path(outputs["claim_candidates_markdown"]), claim_candidates)
     return outputs
 
 
