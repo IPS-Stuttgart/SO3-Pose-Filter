@@ -161,6 +161,28 @@ CLASS_COMPARISON_COLUMNS = [
     "baseline_best_methods",
 ]
 
+CLAIM_CANDIDATE_COLUMNS = [
+    "dataset",
+    "source",
+    "motion_bin",
+    "target_class",
+    "baseline_class",
+    "evidence",
+    "condition_count",
+    "mean_improvement_deg",
+    "median_improvement_deg",
+    "ci95_low_deg",
+    "ci95_high_deg",
+    "win_count",
+    "loss_count",
+    "tie_count",
+    "win_rate",
+    "sign_test_p_value",
+    "target_best_methods",
+    "baseline_best_methods",
+    "claim_sentence",
+]
+
 
 @dataclass(frozen=True)
 class DetectorRunSpec:
@@ -400,8 +422,10 @@ def _standard_outputs(output_dir: Path) -> dict[str, str]:
         "sanity_report_json": str(output_dir / "accuracy_leaderboard_sanity_report.json"),
         "sanity_report_markdown": str(output_dir / "accuracy_leaderboard_sanity_report.md"),
         "comparison_report_csv": str(output_dir / "accuracy_leaderboard_method_comparisons.csv"),
+        "class_comparisons_csv": str(output_dir / "accuracy_leaderboard_class_comparisons.csv"),
         "comparison_report_json": str(output_dir / "accuracy_leaderboard_comparison_report.json"),
         "comparison_report_markdown": str(output_dir / "accuracy_leaderboard_comparison_report.md"),
+        "claim_candidates_csv": str(output_dir / "accuracy_leaderboard_claim_candidates.csv"),
         "claim_candidates_json": str(output_dir / "accuracy_leaderboard_claim_candidates.json"),
         "claim_candidates_markdown": str(output_dir / "accuracy_leaderboard_claim_candidates.md"),
     }
@@ -1574,6 +1598,7 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
     )
     _write_sanity_report_markdown(Path(outputs["sanity_report_markdown"]), sanity_report)
     _write_table_csv(Path(outputs["comparison_report_csv"]), method_comparisons, METHOD_COMPARISON_COLUMNS)
+    _write_table_csv(Path(outputs["class_comparisons_csv"]), class_comparisons, CLASS_COMPARISON_COLUMNS)
     Path(outputs["comparison_report_json"]).write_text(
         json.dumps(
             {
@@ -1591,6 +1616,7 @@ def write_outputs(output_dir: Path, rows: list[dict[str, Any]]) -> dict[str, str
         method_comparisons=method_comparisons,
         class_comparisons=class_comparisons,
     )
+    _write_table_csv(Path(outputs["claim_candidates_csv"]), claim_candidates, CLAIM_CANDIDATE_COLUMNS)
     Path(outputs["claim_candidates_json"]).write_text(
         json.dumps({"rows": claim_candidates, "row_count": len(claim_candidates)}, indent=2),
         encoding="utf-8",

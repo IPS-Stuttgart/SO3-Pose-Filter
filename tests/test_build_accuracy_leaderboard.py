@@ -109,12 +109,16 @@ class AccuracyLeaderboardTest(unittest.TestCase):
                 "sanity_report_json",
                 "sanity_report_markdown",
                 "comparison_report_csv",
+                "class_comparisons_csv",
                 "comparison_report_json",
                 "comparison_report_markdown",
+                "claim_candidates_csv",
                 "claim_candidates_json",
                 "claim_candidates_markdown",
             ]:
                 self.assertTrue(Path(outputs[key]).is_file(), key)
+                if key.endswith("_csv"):
+                    self.assertGreater(len(Path(outputs[key]).read_text(encoding="utf-8").splitlines()), 1, key)
 
             summary = json.loads(Path(outputs["paper_summary_json"]).read_text(encoding="utf-8"))
             gaussian = next(row for row in summary["rows"] if row["method"] == "gaussian_rw")

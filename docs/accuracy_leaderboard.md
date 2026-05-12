@@ -51,6 +51,7 @@ The script writes:
 - `accuracy_leaderboard_paper_summary.*` - aggregate paper-facing summary across noise and occlusion conditions.
 - `accuracy_leaderboard_sanity_report.*` - baseline coverage and duplicate-row checks.
 - `accuracy_leaderboard_method_comparisons.csv` - paired method-vs-baseline comparisons over matched conditions.
+- `accuracy_leaderboard_class_comparisons.csv` - paired method-class comparisons, such as causal online filters versus offline smoothers.
 - `accuracy_leaderboard_comparison_report.json` - method and method-class comparisons with win rates, exact paired sign-test p-values, and bootstrap intervals.
 - `accuracy_leaderboard_comparison_report.md` - readable comparison report, including causal-online versus offline-smoother comparisons.
 - `accuracy_leaderboard_claim_candidates.*` - cautious within-benchmark claim checks derived from the class comparisons.

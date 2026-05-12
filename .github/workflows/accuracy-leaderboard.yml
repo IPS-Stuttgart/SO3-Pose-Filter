@@ -198,8 +198,10 @@ jobs:
           test -s "$OUTPUT_DIR/accuracy_leaderboard_sanity_report.json"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_sanity_report.md"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_method_comparisons.csv"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_class_comparisons.csv"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_comparison_report.json"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_comparison_report.md"
+          test -s "$OUTPUT_DIR/accuracy_leaderboard_claim_candidates.csv"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_claim_candidates.json"
           test -s "$OUTPUT_DIR/accuracy_leaderboard_claim_candidates.md"
           python - <<'PY'
