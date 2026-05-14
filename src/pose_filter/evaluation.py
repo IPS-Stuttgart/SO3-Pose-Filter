@@ -11,7 +11,8 @@ from typing import NamedTuple, TypeVar
 import numpy as np
 
 from .data import PoseSequence
-from .measurements import make_synthetic_measurements, observed_error_deg
+from .measurement_config import MeasurementConfigLike, MeasurementRealismConfig
+from .measurements import SyntheticMeasurements, make_synthetic_measurements, observed_error_deg
 from .particle_filter import run_filter
 from .smoothing import SmootherConfig, run_baseline_smoothers
 from .so3 import geodesic_distance, left_delta, mean_joint_distance_deg
@@ -34,6 +35,8 @@ class _FilterConfig(NamedTuple):
 
 FILTER_SUMMARY_KEYS = [
     "mean_confidence",
+    "outlier_fraction",
+    "mean_joint_noise_sigma_deg",
     "observed_error_deg",
     "observed_joint_error_deg",
     "filter_error_deg",
@@ -97,11 +100,7 @@ def _nanmean(values) -> float:
     return float(np.mean(valid))
 
 
-def _distance_mean_deg(
-    truth: np.ndarray,
-    estimate: np.ndarray,
-    mask: np.ndarray | None = None,
-) -> float:
+def _distance_mean_deg(truth: np.ndarray, estimate: np.ndarray, mask: np.ndarray | None = None) -> float:
     dist = geodesic_distance(truth, estimate)
     if mask is not None:
         dist = dist[np.asarray(mask, dtype=bool)]
@@ -110,11 +109,7 @@ def _distance_mean_deg(
     return float(np.degrees(np.mean(dist)))
 
 
-def _per_joint_distance_deg(
-    truth: np.ndarray,
-    estimate: np.ndarray,
-    mask: np.ndarray | None = None,
-) -> np.ndarray:
+def _per_joint_distance_deg(truth: np.ndarray, estimate: np.ndarray, mask: np.ndarray | None = None) -> np.ndarray:
     dist = geodesic_distance(truth, estimate)
     out = np.full(dist.shape[1], np.nan, dtype=np.float64)
     active = None if mask is None else np.asarray(mask, dtype=bool)
@@ -168,13 +163,7 @@ def temporal_metrics(rotations: np.ndarray, truth: np.ndarray | None = None) -> 
     return row
 
 
-def _temporal_rows(
-    sequence: str,
-    truth: np.ndarray,
-    observations: np.ndarray,
-    estimates: np.ndarray,
-    persistence_estimates: np.ndarray,
-) -> list[dict]:
+def _temporal_rows(sequence: str, truth: np.ndarray, observations: np.ndarray, estimates: np.ndarray, persistence_estimates: np.ndarray) -> list[dict]:
     rows = []
     for name, rotations in [
         ("truth", truth),
@@ -224,6 +213,50 @@ def _reappeared_joint_mask(mask: np.ndarray) -> np.ndarray:
     return out
 
 
+def _mean_active_confidence(measurements: SyntheticMeasurements) -> float:
+    active = measurements.mask
+    if not np.any(active):
+        return float("nan")
+    return float(np.mean(measurements.confidence[active]))
+
+
+def _outlier_fraction(measurements: SyntheticMeasurements) -> float:
+    if measurements.outlier_mask is None:
+        return 0.0
+    return float(np.mean(measurements.outlier_mask))
+
+
+def _mean_joint_noise_sigma_deg(measurements: SyntheticMeasurements, fallback_noise_deg: float) -> float:
+    if measurements.joint_noise_sigma_rad is None:
+        return float(fallback_noise_deg)
+    active_noise = measurements.joint_noise_sigma_rad[measurements.mask]
+    if active_noise.size == 0:
+        return float("nan")
+    return float(np.degrees(np.mean(active_noise)))
+
+
+def _make_measurements(
+    truth: np.ndarray,
+    noise_deg: float,
+    occlusion_prob: float,
+    rng: np.random.Generator,
+    *,
+    confidence_noise_std: float,
+    min_confidence: float,
+    measurement_config: MeasurementConfigLike = None,
+) -> SyntheticMeasurements:
+    config = MeasurementRealismConfig.coerce(measurement_config)
+    return make_synthetic_measurements(
+        truth,
+        noise_deg,
+        occlusion_prob,
+        rng,
+        confidence_noise_std=confidence_noise_std,
+        min_confidence=min_confidence,
+        **config.to_kwargs(),
+    )
+
+
 def evaluate_filter_sequence_artifacts(
     seq: PoseSequence,
     transition_model: TransitionModel,
@@ -238,14 +271,16 @@ def evaluate_filter_sequence_artifacts(
     resample_threshold: float = 0.5,
     filter_backend: str = "numpy",
     smoother_config: SmootherConfig | None = None,
+    measurement_config: MeasurementConfigLike = None,
 ) -> FilterEvaluationArtifacts:
-    measurements = make_synthetic_measurements(
+    measurements = _make_measurements(
         seq.rotations,
         noise_deg,
         occlusion_prob,
         rng,
         confidence_noise_std=confidence_noise_std,
         min_confidence=min_confidence,
+        measurement_config=measurement_config,
     )
     result = run_filter(
         measurements.observations,
@@ -256,10 +291,12 @@ def evaluate_filter_sequence_artifacts(
         rng,
         proposal_gain=proposal_gain,
         confidence=measurements.confidence,
+        joint_noise_sigma_rad=measurements.joint_noise_sigma_rad,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
         backend=filter_backend,
     )
+
     persistence = PersistenceTransition()
     persistence_estimates_list = [seq.rotations[0]]
     x = seq.rotations[0]
@@ -284,7 +321,12 @@ def evaluate_filter_sequence_artifacts(
         "frames": int(seq.rotations.shape[0]),
         "noise_deg": float(noise_deg),
         "occlusion_prob": float(occlusion_prob),
-        "mean_confidence": float(np.mean(measurements.confidence[measurements.mask])),
+        "mean_confidence": _mean_active_confidence(measurements),
+        "occlusion_model": measurements.occlusion_model,
+        "outlier_prob": float(measurements.outlier_prob),
+        "outlier_fraction": _outlier_fraction(measurements),
+        "confidence_calibrated_noise": measurements.joint_noise_sigma_rad is not None,
+        "mean_joint_noise_sigma_deg": _mean_joint_noise_sigma_deg(measurements, noise_deg),
         "num_particles": int(num_particles),
         "proposal_gain": float(proposal_gain),
         "factorized_update": bool(factorized_update),
@@ -323,21 +365,8 @@ def evaluate_filter_sequence_artifacts(
 
     return FilterEvaluationArtifacts(
         metrics=metrics,
-        per_joint_rows=_per_joint_rows(
-            seq.name,
-            seq.rotations,
-            measurements.observations,
-            result.estimates,
-            persistence_estimates,
-            measurements.mask,
-        ),
-        temporal_rows=_temporal_rows(
-            seq.name,
-            seq.rotations,
-            measurements.observations,
-            result.estimates,
-            persistence_estimates,
-        ),
+        per_joint_rows=_per_joint_rows(seq.name, seq.rotations, measurements.observations, result.estimates, persistence_estimates, measurements.mask),
+        temporal_rows=_temporal_rows(seq.name, seq.rotations, measurements.observations, result.estimates, persistence_estimates),
     )
 
 
@@ -355,6 +384,7 @@ def evaluate_filter_sequence(
     min_confidence: float = 0.2,
     filter_backend: str = "numpy",
     smoother_config: SmootherConfig | None = None,
+    measurement_config: MeasurementConfigLike = None,
 ) -> dict:
     return evaluate_filter_sequence_artifacts(
         seq,
@@ -370,6 +400,7 @@ def evaluate_filter_sequence(
         min_confidence=min_confidence,
         filter_backend=filter_backend,
         smoother_config=smoother_config,
+        measurement_config=measurement_config,
     ).metrics
 
 
@@ -387,6 +418,7 @@ def evaluate_filter(
     resample_threshold: float = 0.5,
     filter_backend: str = "numpy",
     smoother_config: SmootherConfig | None = None,
+    measurement_config: MeasurementConfigLike = None,
 ) -> list[dict]:
     rows = []
     for idx, seq in enumerate(sequences):
@@ -406,6 +438,7 @@ def evaluate_filter(
                 resample_threshold=resample_threshold,
                 filter_backend=filter_backend,
                 smoother_config=smoother_config,
+                measurement_config=measurement_config,
             )
         )
     return rows
@@ -425,6 +458,7 @@ def evaluate_filter_with_artifacts(
     min_confidence: float = 0.2,
     filter_backend: str = "numpy",
     smoother_config: SmootherConfig | None = None,
+    measurement_config: MeasurementConfigLike = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     metrics = []
     per_joint_rows = []
@@ -445,6 +479,7 @@ def evaluate_filter_with_artifacts(
             min_confidence=min_confidence,
             filter_backend=filter_backend,
             smoother_config=smoother_config,
+            measurement_config=measurement_config,
         )
         metrics.append(artifacts.metrics)
         per_joint_rows.extend(artifacts.per_joint_rows)
@@ -462,25 +497,27 @@ def _unique_preserve_order(values: list[_T]) -> list[_T]:
 
 def _mean_row(rows: list[dict]) -> dict:
     return {
-        "mean_confidence": float(np.nanmean([r["mean_confidence"] for r in rows])),
-        "observed_error_deg": float(np.nanmean([r["observed_error_deg"] for r in rows])),
-        "filter_error_deg": float(np.nanmean([r["filter_error_deg"] for r in rows])),
-        "persistence_error_deg": float(np.nanmean([r["persistence_error_deg"] for r in rows])),
-        "smoother_ema_error_deg": float(np.nanmean([r["smoother_ema_error_deg"] for r in rows])),
-        "smoother_chordal_error_deg": float(np.nanmean([r["smoother_chordal_error_deg"] for r in rows])),
-        "savgol_tangent_error_deg": float(np.nanmean([r["savgol_tangent_error_deg"] for r in rows])),
-        "mean_ess": float(np.nanmean([r["mean_ess"] for r in rows])),
-        "min_ess": float(np.nanmean([r["min_ess"] for r in rows])),
-        "final_ess": float(np.nanmean([r["final_ess"] for r in rows])),
-        "mean_resample_count": float(np.nanmean([r["resample_count"] for r in rows])),
-        "resample_fraction": float(np.nanmean([r["resample_fraction"] for r in rows])),
-        "mean_particle_spread_deg": float(np.nanmean([r["mean_particle_spread_deg"] for r in rows])),
-        "min_particle_spread_deg": float(np.nanmean([r["min_particle_spread_deg"] for r in rows])),
-        "final_particle_spread_deg": float(np.nanmean([r["final_particle_spread_deg"] for r in rows])),
-        "collapse_fraction": float(np.nanmean([r["collapse_fraction"] for r in rows])),
-        "filter_reappeared_joint_error_deg": float(np.nanmean([r["filter_reappeared_joint_error_deg"] for r in rows])),
-        "persistence_reappeared_joint_error_deg": float(np.nanmean([r["persistence_reappeared_joint_error_deg"] for r in rows])),
-        "reappeared_joint_count": float(np.nanmean([r["reappeared_joint_count"] for r in rows])),
+        "mean_confidence": _nanmean([r["mean_confidence"] for r in rows]),
+        "outlier_fraction": _nanmean([r["outlier_fraction"] for r in rows]),
+        "mean_joint_noise_sigma_deg": _nanmean([r["mean_joint_noise_sigma_deg"] for r in rows]),
+        "observed_error_deg": _nanmean([r["observed_error_deg"] for r in rows]),
+        "filter_error_deg": _nanmean([r["filter_error_deg"] for r in rows]),
+        "persistence_error_deg": _nanmean([r["persistence_error_deg"] for r in rows]),
+        "smoother_ema_error_deg": _nanmean([r["smoother_ema_error_deg"] for r in rows]),
+        "smoother_chordal_error_deg": _nanmean([r["smoother_chordal_error_deg"] for r in rows]),
+        "savgol_tangent_error_deg": _nanmean([r["savgol_tangent_error_deg"] for r in rows]),
+        "mean_ess": _nanmean([r["mean_ess"] for r in rows]),
+        "min_ess": _nanmean([r["min_ess"] for r in rows]),
+        "final_ess": _nanmean([r["final_ess"] for r in rows]),
+        "mean_resample_count": _nanmean([r["resample_count"] for r in rows]),
+        "resample_fraction": _nanmean([r["resample_fraction"] for r in rows]),
+        "mean_particle_spread_deg": _nanmean([r["mean_particle_spread_deg"] for r in rows]),
+        "min_particle_spread_deg": _nanmean([r["min_particle_spread_deg"] for r in rows]),
+        "final_particle_spread_deg": _nanmean([r["final_particle_spread_deg"] for r in rows]),
+        "collapse_fraction": _nanmean([r["collapse_fraction"] for r in rows]),
+        "filter_reappeared_joint_error_deg": _nanmean([r["filter_reappeared_joint_error_deg"] for r in rows]),
+        "persistence_reappeared_joint_error_deg": _nanmean([r["persistence_reappeared_joint_error_deg"] for r in rows]),
+        "reappeared_joint_count": _nanmean([r["reappeared_joint_count"] for r in rows]),
     }
 
 
@@ -502,9 +539,9 @@ def ablation_rows(
     min_confidence: float = 0.2,
     filter_backend: str = "numpy",
     smoother_config: SmootherConfig | None = None,
+    measurement_config: MeasurementConfigLike = None,
 ) -> list[dict]:
     """Run one-axis-at-a-time filter ablations around the configured baseline."""
-
     base = _FilterConfig(
         num_particles=int(base_num_particles),
         proposal_gain=float(base_proposal_gain),
@@ -512,31 +549,19 @@ def ablation_rows(
         resample_threshold=float(base_resample_threshold),
     )
     variants = [("baseline", "baseline", base)]
-
     for count in _unique_preserve_order([base.num_particles, *[int(x) for x in particle_counts]]):
-        cfg = base._replace(num_particles=count)
-        variants.append(("num_particles", str(count), cfg))
+        variants.append(("num_particles", str(count), base._replace(num_particles=count)))
     for gain in _unique_preserve_order([0.0, base.proposal_gain, *[float(x) for x in proposal_gains]]):
-        cfg = base._replace(proposal_gain=gain)
-        variants.append(("proposal_gain", f"{gain:g}", cfg))
+        variants.append(("proposal_gain", f"{gain:g}", base._replace(proposal_gain=gain)))
     for enabled in _unique_preserve_order([False, base.factorized_update, *[bool(x) for x in factorized_updates]]):
-        cfg = base._replace(factorized_update=enabled)
-        variants.append(("factorized_update", str(enabled).lower(), cfg))
+        variants.append(("factorized_update", str(enabled).lower(), base._replace(factorized_update=enabled)))
     for threshold in _unique_preserve_order([base.resample_threshold, *[float(x) for x in resample_thresholds]]):
-        cfg = base._replace(resample_threshold=threshold)
-        variants.append(("resample_threshold", f"{threshold:g}", cfg))
+        variants.append(("resample_threshold", f"{threshold:g}", base._replace(resample_threshold=threshold)))
 
     rows = []
     seen = set()
     for ablation, value, cfg in variants:
-        key = (
-            ablation,
-            value,
-            cfg.num_particles,
-            cfg.proposal_gain,
-            cfg.factorized_update,
-            cfg.resample_threshold,
-        )
+        key = (ablation, value, cfg.num_particles, cfg.proposal_gain, cfg.factorized_update, cfg.resample_threshold)
         if key in seen:
             continue
         seen.add(key)
@@ -554,6 +579,7 @@ def ablation_rows(
             min_confidence=min_confidence,
             filter_backend=filter_backend,
             smoother_config=smoother_config,
+            measurement_config=measurement_config,
         )
         rows.append(
             {
@@ -570,23 +596,10 @@ def ablation_rows(
     return rows
 
 
-def transition_metric_rows(
-    model_name: str,
-    model: TransitionModel,
-    test_sequences: list[PoseSequence],
-    rollout_horizon: int,
-) -> list[dict]:
+def transition_metric_rows(model_name: str, model: TransitionModel, test_sequences: list[PoseSequence], rollout_horizon: int) -> list[dict]:
     return [
-        {
-            "model": model_name,
-            "metric": "one_step_error_deg",
-            "value": one_step_error_deg(model, test_sequences),
-        },
-        {
-            "model": model_name,
-            "metric": "rollout_error_deg",
-            "value": rollout_error_deg(model, test_sequences, rollout_horizon),
-        },
+        {"model": model_name, "metric": "one_step_error_deg", "value": one_step_error_deg(model, test_sequences)},
+        {"model": model_name, "metric": "rollout_error_deg", "value": rollout_error_deg(model, test_sequences, rollout_horizon)},
     ]
 
 
@@ -604,8 +617,10 @@ def robustness_rows(
     resample_threshold: float = 0.5,
     filter_backend: str = "numpy",
     smoother_config: SmootherConfig | None = None,
+    measurement_config: MeasurementConfigLike = None,
 ) -> list[dict]:
     rows = []
+    measurement_cfg = MeasurementRealismConfig.coerce(measurement_config)
     for noise in noise_grid:
         for occ in occlusion_grid:
             result_rows = evaluate_filter(
@@ -622,12 +637,18 @@ def robustness_rows(
                 resample_threshold=resample_threshold,
                 filter_backend=filter_backend,
                 smoother_config=smoother_config,
+                measurement_config=measurement_cfg,
             )
             rows.append(
                 {
                     "noise_deg": float(noise),
                     "occlusion_prob": float(occ),
+                    "occlusion_model": measurement_cfg.occlusion_model,
+                    "outlier_prob": float(measurement_cfg.outlier_prob),
+                    "confidence_calibrated_noise": bool(measurement_cfg.confidence_calibrated_noise),
                     "mean_confidence": _nanmean([r["mean_confidence"] for r in result_rows]),
+                    "outlier_fraction": _nanmean([r["outlier_fraction"] for r in result_rows]),
+                    "mean_joint_noise_sigma_deg": _nanmean([r["mean_joint_noise_sigma_deg"] for r in result_rows]),
                     "filter_backend": filter_backend,
                     "observed_error_deg": _nanmean([r["observed_error_deg"] for r in result_rows]),
                     "observed_joint_error_deg": _nanmean([r["observed_joint_error_deg"] for r in result_rows]),
@@ -671,15 +692,17 @@ def trajectory_preview_rows(
     resample_threshold: float = 0.5,
     filter_backend: str = "numpy",
     smoother_config: SmootherConfig | None = None,
+    measurement_config: MeasurementConfigLike = None,
 ) -> list[dict]:
     rng = np.random.default_rng(seed)
-    measurements = make_synthetic_measurements(
+    measurements = _make_measurements(
         seq.rotations,
         noise_deg,
         occlusion_prob,
         rng,
         confidence_noise_std=confidence_noise_std,
         min_confidence=min_confidence,
+        measurement_config=measurement_config,
     )
     result = run_filter(
         measurements.observations,
@@ -690,6 +713,7 @@ def trajectory_preview_rows(
         rng,
         proposal_gain=proposal_gain,
         confidence=measurements.confidence,
+        joint_noise_sigma_rad=measurements.joint_noise_sigma_rad,
         factorized_update=factorized_update,
         resample_threshold=resample_threshold,
         backend=filter_backend,
@@ -712,6 +736,8 @@ def trajectory_preview_rows(
             "filter_observed_joint_error_deg": (float(np.degrees(np.mean(filter_observed))) if filter_observed.size else float("nan")),
             "filter_occluded_joint_error_deg": (float(np.degrees(np.mean(filter_occluded))) if filter_occluded.size else float("nan")),
             "observed_joint_fraction": float(np.mean(measurements.mask[t])),
+            "outlier_fraction": float(np.mean(measurements.outlier_mask[t])) if measurements.outlier_mask is not None else 0.0,
+            "mean_joint_noise_sigma_deg": _mean_joint_noise_sigma_deg(measurements, noise_deg),
             "ess": float(result.effective_sample_size[t]),
         }
         for name, dist in dist_smoothers.items():

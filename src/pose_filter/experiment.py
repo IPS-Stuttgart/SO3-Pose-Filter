@@ -18,6 +18,7 @@ from .evaluation import (
     write_csv,
     write_json,
 )
+from .measurement_config import MeasurementRealismConfig
 from .model_factory import build_transition_model
 from .plotting import robustness_plot, trajectory_plot
 from .smoothing import SmootherConfig
@@ -71,6 +72,7 @@ def run_experiment(config: dict) -> dict:
     factorized_update = bool(config.get("factorized_update", True))
     resample_threshold = float(config.get("resample_threshold", 0.5))
     filter_backend = str(config.get("filter_backend", "numpy"))
+    measurement_config = MeasurementRealismConfig.from_mapping(config)
     smoother_config = SmootherConfig(
         ema_alpha=float(config.get("smoother_ema_alpha", 0.35)),
         chordal_window=int(config.get("smoother_chordal_window", 5)),
@@ -126,6 +128,7 @@ def run_experiment(config: dict) -> dict:
         resample_threshold=resample_threshold,
         filter_backend=filter_backend,
         smoother_config=smoother_config,
+        measurement_config=measurement_config,
     )
     ablations = ablation_rows(
         test,
@@ -145,6 +148,7 @@ def run_experiment(config: dict) -> dict:
         min_confidence=min_confidence,
         filter_backend=filter_backend,
         smoother_config=smoother_config,
+        measurement_config=measurement_config,
     )
     robust_rows = robustness_rows(
         test,
@@ -160,6 +164,7 @@ def run_experiment(config: dict) -> dict:
         resample_threshold=resample_threshold,
         filter_backend=filter_backend,
         smoother_config=smoother_config,
+        measurement_config=measurement_config,
     )
     preview_rows = trajectory_preview_rows(
         test[0],
@@ -175,6 +180,7 @@ def run_experiment(config: dict) -> dict:
         resample_threshold=resample_threshold,
         filter_backend=filter_backend,
         smoother_config=smoother_config,
+        measurement_config=measurement_config,
     )
 
     write_csv(output_dir / "transition_metrics.csv", transition_rows)
@@ -223,6 +229,12 @@ def run_experiment(config: dict) -> dict:
             "savgol_tangent_window": smoother_config.tangent_savgol_window,
             "savgol_tangent_degree": smoother_config.tangent_savgol_degree,
         },
+        "measurement_model": measurement_config.to_summary(
+            noise_deg=noise_deg,
+            occlusion_prob=occlusion_prob,
+            confidence_noise_std=confidence_noise_std,
+            min_confidence=min_confidence,
+        ),
         "transition_metrics": transition_rows,
         "filter_metrics_mean": {key: _mean_metric(filter_rows, key) for key in FILTER_SUMMARY_KEYS},
         "ablation_metrics": ablations,
