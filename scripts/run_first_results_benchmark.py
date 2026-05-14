@@ -154,10 +154,7 @@ def _closest(values: list[float], target: float) -> float:
 
 
 def _method_means(rows: list[dict[str, Any]]) -> dict[str, float]:
-    return {
-        method: _mean([float(row["tracking_error_deg"]) for row in rows if row["method"] == method])
-        for method in sorted({row["method"] for row in rows})
-    }
+    return {method: _mean([float(row["tracking_error_deg"]) for row in rows if row["method"] == method]) for method in sorted({row["method"] for row in rows})}
 
 
 def _representative_rows(rows: list[dict[str, Any]], noise_deg: float, occlusion_prob: float) -> list[dict[str, Any]]:
@@ -175,13 +172,15 @@ def _acceptance(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str,
     target_method = str(
         config.get(
             "benchmark_acceptance_method",
-            "gru_delta"
-            if any(row["method"] == "gru_delta" for row in rows)
-            else "history_mlp_delta"
-            if any(row["method"] == "history_mlp_delta" for row in rows)
-            else "pyrecest_mlp_pf"
-            if any(row["method"] == "pyrecest_mlp_pf" for row in rows)
-            else "pyrecest_pf",
+            (
+                "gru_delta"
+                if any(row["method"] == "gru_delta" for row in rows)
+                else (
+                    "history_mlp_delta"
+                    if any(row["method"] == "history_mlp_delta" for row in rows)
+                    else "pyrecest_mlp_pf" if any(row["method"] == "pyrecest_mlp_pf" for row in rows) else "pyrecest_pf"
+                )
+            ),
         )
     )
     target = representative_by_method.get(target_method)
@@ -205,21 +204,27 @@ def _write_plots(output_dir: Path, rows: list[dict[str, Any]], methods: tuple[st
     plot_method = str(
         config.get(
             "benchmark_heatmap_method",
-            "noise_adaptive_selector"
-            if "noise_adaptive_selector" in methods
-            else "adaptive_gaussian_rw"
-            if "adaptive_gaussian_rw" in methods
-            else "pyrecest_mlp_pf"
-            if "pyrecest_mlp_pf" in methods
-            else "gru_delta"
-            if "gru_delta" in methods
-            else "history_mlp_delta"
-            if "history_mlp_delta" in methods
-            else "constant_velocity"
-            if "constant_velocity" in methods
-            else "pyrecest_pf"
-            if "pyrecest_pf" in methods
-            else "gaussian_rw",
+            (
+                "noise_adaptive_selector"
+                if "noise_adaptive_selector" in methods
+                else (
+                    "adaptive_gaussian_rw"
+                    if "adaptive_gaussian_rw" in methods
+                    else (
+                        "pyrecest_mlp_pf"
+                        if "pyrecest_mlp_pf" in methods
+                        else (
+                            "gru_delta"
+                            if "gru_delta" in methods
+                            else (
+                                "history_mlp_delta"
+                                if "history_mlp_delta" in methods
+                                else "constant_velocity" if "constant_velocity" in methods else "pyrecest_pf" if "pyrecest_pf" in methods else "gaussian_rw"
+                            )
+                        )
+                    )
+                )
+            ),
         )
     )
     heatmap_rows = [row for row in rows if row["method"] == plot_method]
@@ -382,12 +387,13 @@ def run_first_results_benchmark(
     def add_model_rows(method: str, model_name: str, backend: str = "numpy", gain: float | None = None) -> None:
         if method not in methods:
             return
+        model: Any
         if model_name == "constant_velocity":
             model = ConstantVelocityTransition.fit(train, max_std_rad=_process_noise_cap(config))
         else:
             model = build_transition_model(model_name, train, process_noise_deg=config.get("process_noise_deg"), config=config)
         built_models[model_name] = model
-        rows = _run_robustness(
+        method_rows = _run_robustness(
             test,
             model,
             noise_grid,
@@ -403,14 +409,14 @@ def run_first_results_benchmark(
             smoother_config=smoother_config,
             measurement_config=measurement_config,
         )
-        model_rows_by_method[method] = {_grid_key(row): row for row in rows}
+        model_rows_by_method[method] = {_grid_key(row): row for row in method_rows}
 
     add_model_rows("deterministic_persistence_pf", "deterministic_persistence", gain=collapse_ablation_proposal_gain)
     add_model_rows("noisy_persistence_pf", "noisy_persistence", gain=collapse_ablation_proposal_gain)
     add_model_rows("constant_velocity", "constant_velocity")
     add_model_rows("adaptive_gaussian_rw", "adaptive_gaussian_rw")
     if "pyrecest_pf" in methods:
-        rows = _run_robustness(
+        pyrecest_rows = _run_robustness(
             test,
             gaussian_model,
             noise_grid,
@@ -426,16 +432,46 @@ def run_first_results_benchmark(
             smoother_config=smoother_config,
             measurement_config=measurement_config,
         )
-        model_rows_by_method["pyrecest_pf"] = {_grid_key(row): row for row in rows}
+        model_rows_by_method["pyrecest_pf"] = {_grid_key(row): row for row in pyrecest_rows}
     if "mlp_delta" in methods or "pyrecest_mlp_pf" in methods:
         mlp_model = build_transition_model("mlp_delta", train, process_noise_deg=config.get("process_noise_deg"), config=config)
         built_models["mlp_delta"] = mlp_model
         if "mlp_delta" in methods:
-            rows = _run_robustness(test, mlp_model, noise_grid, occlusion_grid, num_particles, seed, proposal_gain=proposal_gain, confidence_noise_std=confidence_noise_std, min_confidence=min_confidence, factorized_update=factorized_update, resample_threshold=resample_threshold, filter_backend="numpy", smoother_config=smoother_config, measurement_config=measurement_config)
-            model_rows_by_method["mlp_delta"] = {_grid_key(row): row for row in rows}
+            mlp_rows = _run_robustness(
+                test,
+                mlp_model,
+                noise_grid,
+                occlusion_grid,
+                num_particles,
+                seed,
+                proposal_gain=proposal_gain,
+                confidence_noise_std=confidence_noise_std,
+                min_confidence=min_confidence,
+                factorized_update=factorized_update,
+                resample_threshold=resample_threshold,
+                filter_backend="numpy",
+                smoother_config=smoother_config,
+                measurement_config=measurement_config,
+            )
+            model_rows_by_method["mlp_delta"] = {_grid_key(row): row for row in mlp_rows}
         if "pyrecest_mlp_pf" in methods:
-            rows = _run_robustness(test, mlp_model, noise_grid, occlusion_grid, num_particles, seed, proposal_gain=proposal_gain, confidence_noise_std=confidence_noise_std, min_confidence=min_confidence, factorized_update=factorized_update, resample_threshold=resample_threshold, filter_backend="pyrecest", smoother_config=smoother_config, measurement_config=measurement_config)
-            model_rows_by_method["pyrecest_mlp_pf"] = {_grid_key(row): row for row in rows}
+            pyrecest_mlp_rows = _run_robustness(
+                test,
+                mlp_model,
+                noise_grid,
+                occlusion_grid,
+                num_particles,
+                seed,
+                proposal_gain=proposal_gain,
+                confidence_noise_std=confidence_noise_std,
+                min_confidence=min_confidence,
+                factorized_update=factorized_update,
+                resample_threshold=resample_threshold,
+                filter_backend="pyrecest",
+                smoother_config=smoother_config,
+                measurement_config=measurement_config,
+            )
+            model_rows_by_method["pyrecest_mlp_pf"] = {_grid_key(row): row for row in pyrecest_mlp_rows}
     add_model_rows("history_mlp_delta", "history_mlp_delta")
     add_model_rows("gru_delta", "gru_delta")
 

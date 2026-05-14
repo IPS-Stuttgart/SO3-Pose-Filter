@@ -109,7 +109,7 @@ class MeasurementRealismConfig:
         cls,
         value: "MeasurementRealismConfig | Mapping[str, Any] | None",
     ) -> "MeasurementRealismConfig":
-        if isinstance(value, cls):
+        if isinstance(value, MeasurementRealismConfig):
             return value
         return cls.from_mapping(value)
 
