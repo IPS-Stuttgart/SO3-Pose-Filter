@@ -18,9 +18,7 @@ def run_realistic_experiment(config: dict) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run an SO(3)^K benchmark with config-defined realistic synthetic measurements."
-    )
+    parser = argparse.ArgumentParser(description="Run an SO(3)^K benchmark with config-defined realistic synthetic measurements.")
     parser.add_argument("--config", required=True, help="Path to JSON experiment config.")
     args = parser.parse_args()
 
