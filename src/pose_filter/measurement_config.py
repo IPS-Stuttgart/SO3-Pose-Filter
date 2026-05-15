@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 _PROBABILITY_KEYS = {
     "occlusion_entry_prob",
@@ -111,7 +111,7 @@ class MeasurementRealismConfig:
     ) -> "MeasurementRealismConfig":
         if isinstance(value, MeasurementRealismConfig):
             return value
-        return cls.from_mapping(value)
+        return cls.from_mapping(cast(Mapping[str, Any] | None, value))
 
     @property
     def enabled(self) -> bool:
