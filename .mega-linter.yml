@@ -4,10 +4,11 @@ SHOW_ELAPSED_TIME: true
 
 PRE_COMMANDS:
   - command: cat /etc/os-release
-  - command: pip install -e /github/workspace
-    venv: pylint
 
 PYTHON_PYLINT_CONFIG_FILE: LINTER_DEFAULT
+
+ACTION_ZIZMOR_UNSECURED_ENV_VARIABLES:
+  - GITHUB_TOKEN
 
 REPOSITORY_CHECKOV_ARGUMENTS: --skip-check CKV_GHA_7
 
