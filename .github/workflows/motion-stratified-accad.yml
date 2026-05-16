@@ -3,6 +3,11 @@ name: ACCAD Motion-Stratified Benchmark
 on:
   workflow_dispatch:
     inputs:
+      publish_to_paper_repo:
+        description: "Dispatch paper-repo build-results workflow to fetch this raw artifact"
+        required: true
+        type: boolean
+        default: false
       runs_on_json:
         description: JSON array for runs-on. Use self-hosted labels for mounted private data.
         required: true
@@ -202,3 +207,46 @@ jobs:
             ${{ inputs.output_dir }}/benchmarks/**/benchmark_metrics.csv
             ${{ inputs.output_dir }}/benchmarks/**/transition_metrics.csv
             ${{ inputs.output_dir }}/benchmarks/**/plots/*.svg
+
+  dispatch-paper-results:
+    name: Dispatch paper repository build
+    needs: motion-stratified-accad
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_to_paper_repo == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch paper repository build-results workflow
+        env:
+          PAPER_REPO_TOKEN: ${{ secrets.PAPER_REPO_TOKEN }}
+          PAPER_REPO: FlorianPfaff/SO3-Pose-Filter-Paper
+          SOURCE_REPO: IPS-Stuttgart/SO3-Pose-Filter
+          SOURCE_RUN_ID: ${{ github.run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name_prefix }}-${{ github.run_number }}-${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${PAPER_REPO_TOKEN:-}" ]; then
+            echo "::warning::publish_to_paper_repo=true but PAPER_REPO_TOKEN is not configured; skipping paper workflow dispatch"
+            exit 0
+          fi
+          payload=$(python - <<'PY'
+          import json
+          import os
+
+          print(json.dumps({
+              "ref": "main",
+              "inputs": {
+                  "source_repo": os.environ["SOURCE_REPO"],
+                  "source_run_id": os.environ["SOURCE_RUN_ID"],
+                  "artifact_name": os.environ["ARTIFACT_NAME"],
+              },
+          }))
+          PY
+          )
+
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${PAPER_REPO_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${PAPER_REPO}/actions/workflows/build-results.yml/dispatches" \
+            -d "$payload"
